@@ -1,20 +1,12 @@
 # Windows Embedded Compact 7 on the iPod classic
 
 A Board Support Package (BSP) for running Windows Embedded Compact 7 (CE 7) on the iPod classic
-(Samsung S5L8702, ARM926EJ-S, 64 MB RAM), loaded from the hard disk by the
+(Samsung S5L8702, ARM926EJ-S, 64 MB RAM), loaded from the hard disk into memory by a modified
 [Rockbox](https://www.rockbox.org/) bootloader.
 
-**Status: bring-up.** The BSP skeleton and a sample OS design are in place. Nothing has been
-verified on hardware yet.
+<img src="docs/images/booted.png" height=300 />
 
-| Part | State |
-|-|-|
-| Boot via the Rockbox bootloader (`rockbox.ipod`) | Written, untested |
-| Debug serial on the dock connector UART | Written, untested |
-| Timer tick / interrupts (VIC) | Written, untested |
-| Serial KITL (Platform Builder) | Written, untested |
-| Display (LCD, CPU-driven updates) | Working: test pattern and GWES init verified |
-| HDD, PMU, clickwheel, audio | Not started |
+[Boot demo video (YouTube)](https://youtu.be/UabXwbNv9Gw)
 
 ## Layout
 
@@ -25,12 +17,51 @@ verified on hardware yet.
 ## Requirements
 
 - Windows Embedded Compact 7 Platform Builder with **ARMv5** support installed.
-- An iPod classic with the Rockbox bootloader installed and a FAT32 ("Windows formatted") disk.
+- An iPod classic with the patched Rockbox bootloader installed and a FAT32 ("Windows formatted") disk.
 - A 3.3 V USB serial adapter and a 30-pin dock breakout.
 
 See [docs/bringup.md](docs/bringup.md).
 
+## Hardware Support
+
+### Current
+
+These are hardware features that are functional
+
+| Feature | Driver State | Comments |
+|-|-|-|
+| UART | Basic | Dock connector serial (UART0), 115200 8N1, no flow control. Used for KITL debugger connection with Visual Studio |
+| Display | Basic | 320x240 RGB565 only. Screen updates are pushed to the LCD by the CPU, no DMA or acceleration whatsoever |
+
+### Future
+
+**No promises that this project will be continued, but ideally I'd like to get the following implemented:**
+
+| Feature | Comments |
+|-|-|
+| ATA HDD | Mount the FAT32 partition of the hard drive (PATA or CE-ATA, depending on the model) |
+| Battery | Battery level and charging status through the PMU, also needed for the backlight and real-time clock |
+| Clickwheel | Wheel and buttons as keyboard input devices |
+| Audio output | Headphone output through the audio codec |
+| USB Function | Let the iPod be connected as a USB device to a computer (for Mass Storage) |
+
+## Notes
+
+### Bootloader
+
+By default, the Rockbox bootloader can only load boot images up to 8 MB in size. A basic CE kernel image will just about fit, but if you want any sort of graphics the kernel image will exceed the maximum size and the original bootloader won't load it anymore.
+
+A patch for the Rockbox bootloader which adds support for loading a Windows CE image `wince.ipod` of up to 32 MB from the root of the FAT32 drive when holding down the `Play/Pause` key at the bootloader is available in the [rockbox](rockbox) folder.
+
+### Shell
+
+Building an image with the entire CE shell is quite wasteful in terms of memory, as the Explorer based shell requires the whole network stack, which on the iPod is pointless.
+
+Without the shell, the image is ~8 MB with everything required to run graphical apps (GWES). With the shell, the image grows to ~23 MB and takes much longer to boot, especially when connected to a debugger via KITL.
+
+Currently, the sample VS project [iPodCE](iPodCE) has the shell catalog items selected, but I will remove them later for a lighter image.
+
 ## Credits
 
-- The BSP structure comes from CEonPi, the Windows CE 7 Raspberry Pi BSP.
+- The BSP structure comes from [CEonPi](https://github.com/RaduTek/CEonPi), the Windows CE 7 Raspberry Pi BSP.
 - Hardware knowledge comes from the Rockbox project's iPod classic port.
