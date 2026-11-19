@@ -1,0 +1,30 @@
+;
+; platform.reg - BSP registry settings for the ipod6g BSP
+;
+; Note: makeimg reads the copy of this file in the flat release directory.
+; After editing it, run "Copy Files to Release Directory" before makeimg.
+;
+
+[HKEY_LOCAL_MACHINE\Explorer]
+    "Suspend"=dword:0
+
+; @CESYSGEN IF CE_MODULES_DISPLAY
+IF BSP_NODISPLAY !
+; iPod classic LCD: 320x240 RGB565 (src\drivers\ipodlcd)
+[HKEY_LOCAL_MACHINE\Drivers\Display\ipodlcd\Config]
+    "DisplayDll"="ipodlcd.dll"
+
+[HKEY_LOCAL_MACHINE\System\GDI\Drivers]
+    "Display"="ipodlcd.dll"
+
+[HKEY_LOCAL_MACHINE\System\GDI\DisplayCandidates]
+    "Candidate10"="Drivers\\Display\\ipodlcd\\Config"
+
+[HKEY_LOCAL_MACHINE\System\GDI\Rotation]
+    "Angle"=dword:0
+
+; No animation; the panel is updated by CPU copies
+[HKEY_LOCAL_MACHINE\SYSTEM\GWE]
+    "Animate"=dword:0
+ENDIF BSP_NODISPLAY !
+; @CESYSGEN ENDIF CE_MODULES_DISPLAY

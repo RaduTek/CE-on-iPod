@@ -1,0 +1,42 @@
+!if 0
+ipod6g OAL library (oal.lib)
+!endif
+
+TARGETNAME=oal
+TARGETTYPE=LIBRARY
+
+#
+# KITL shares UART0 with the debug serial port. In KITL builds the OAL
+# does not write raw debug text to the UART (debug.c).
+#
+!IF "$(IMGNOKITL)" == ""
+CDEFINES=$(CDEFINES) -DSERIAL_KITL=1
+!ENDIF
+
+#
+# startup.s prints "CE>" on UART0 before KernelStart when EARLY_UART is
+# TRUE: always in IMGNOKITL=1 builds, or on request with BSP_EARLYUART=1.
+#
+BSP_EARLY_UART_ASM=FALSE
+!IF "$(IMGNOKITL)" == "1"
+BSP_EARLY_UART_ASM=TRUE
+!ENDIF
+!IF "$(BSP_EARLYUART)" == "1"
+BSP_EARLY_UART_ASM=TRUE
+!ENDIF
+ADEFINES=-pd "EARLY_UART SETL {$(BSP_EARLY_UART_ASM)}" $(ADEFINES)
+
+SOURCES= \
+    debug.c \
+    init.c \
+    intr.c \
+    ioctl.c \
+    memory.c \
+    power.c \
+    rtc.c \
+    timer.c \
+    vector.c \
+
+ARM_SOURCES= \
+    startup.s \
+

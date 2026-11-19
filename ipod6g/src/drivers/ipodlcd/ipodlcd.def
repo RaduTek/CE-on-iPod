@@ -1,0 +1,8 @@
+;
+; ipodlcd.def - exports of the iPod classic display driver
+;
+LIBRARY IPODLCD
+
+EXPORTS
+    DisplayInit
+    DrvEnableDriver

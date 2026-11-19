@@ -1,0 +1,25 @@
+# Build output (Platform Builder / build.exe)
+obj/
+build.log
+build.err
+build.wrn
+build.dat
+Build*.dat
+*.suo
+*.ncb
+*.user
+Thumbs.db
+
+# OS design output (iPodCE/iPodCE/Wince700, iPodCE/iPodCE/RelDir)
+Wince700/
+RelDir/
+
+# Images
+*.nb0
+*.nb1
+*.ipod
+nk.bin
+
+# Logs dropped in the repo root for review
+/bootlog.txt
+/buildlog.txt

@@ -1,0 +1,68 @@
+;
+; config.bib - memory map for the ipod6g BSP (iPod classic, S5L8702)
+;
+; Physical memory: 64 MB SDRAM at PA 0x08000000-0x0BFFFFFF.
+; OEMAddressTable (src\inc\OEMAddrTable.inc) maps it at VA 0x80000000.
+;
+; Boot: the Rockbox bootloader loads /wince.ipod (PLAY held, our build) from the HDD,
+; strips its 8-byte header, copies the payload to PA 0x08000000 and branches
+; to its first byte. The payload is nk.nb0 (trimmed to the real image end by
+; mkrbipod.ps1), so the image starts at the very beginning of DRAM:
+; NK = 0x80000000.
+;
+; Load limit: 32 MiB with the CE-on-iPod Rockbox bootloader build
+; (MAX_LOADSIZE 32M for IPOD_6G, see docs/bootloader.md), 8 MiB with the
+; stock Rockbox bootloader. The bootloader's own BSS starts right after the
+; load area (PA 0x0A000000), which is free again once CE runs.
+;
+; Do not change this map without checking OEMAddrTable.inc, image_cfg.h and
+; the bootloader load limit.
+;
+
+MEMORY
+
+;   NK must stay at most 32 MB (MAX_LOADSIZE). If romimage overflows it, it
+;   writes nk.nb1 and PostMakeimg.bat fails the build. AUTOSIZE moves the
+;   NK/RAM boundary to the actual image end, so a large NK costs no RAM.
+#define     NKSTART      80000000
+#define     NKLEN        02000000
+#define     RAMSTART     82000000
+#define     RAMLEN       02000000
+
+;-----------------------------------------------------
+;   NAME        ADDRESS     SIZE            TYPE
+;-----------------------------------------------------
+    NK         $(NKSTART)  $(NKLEN)        RAMIMAGE
+    RAM        $(RAMSTART) $(RAMLEN)       RAM
+
+; Fixup vars
+;   kernel.dll:initialKernelLogZones 00000000 0000ffff      FIXUPVAR
+   kernel.dll:initialKernelLogZones 00000000 00000010      FIXUPVAR
+
+CONFIG
+
+; Compress writable sections of modules
+COMPRESSION=ON
+
+IF IMGPROFILER
+    PROFILE=ON
+ELSE
+    PROFILE=OFF
+ENDIF
+
+; Writable kernel sections are relocated to the start of RAM; required
+; because the kernel starts executing with the MMU off.
+KERNELFIXUPS=ON
+
+; Let romimage move the NK/RAM boundary to the actual image size.
+AUTOSIZE=ON
+
+; Flat binary image (nk.nb0) starting at the NK region.
+IF IMGFLASH
+    ROMSTART = 80000000
+    ROMSIZE = $(NKLEN)
+    ROMWIDTH = 32
+ENDIF
+
+; Object store / program memory split
+FSRAMPERCENT=0x20202020

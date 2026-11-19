@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CatalogFile xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" RequiredVersion="7.00" xmlns="urn:Microsoft.PlatformBuilder/Catalog">
+  <FileInformation Id="FileInformation:CE-on-iPod:ipod6g">
+    <Title>ipod6g</Title>
+    <Description>ipod6g BSP Catalog Items</Description>
+    <Vendor>CE-on-iPod</Vendor>
+    <OSVersion>7.00</OSVersion>
+    <FileVersion>0.1</FileVersion>
+  </FileInformation>
+  <Bsp Id="Bsp:CE-on-iPod:ipod6g:ARMV5">
+    <Title>ipod6g: ARMV5</Title>
+    <Description>Apple iPod classic (6th/7th gen, Samsung S5L8702, ARM926EJ-S), booted by the Rockbox bootloader</Description>
+    <PlatformDirectory>ipod6g</PlatformDirectory>
+    <CpuId>Cpu:ARMV5</CpuId>
+    <BspItemId>Item:CE-on-iPod:ipod6g:OAL</BspItemId>
+    <BspItemId>Item:CE-on-iPod:ipod6g:KITL</BspItemId>
+  </Bsp>
+  <Item Id="Item:CE-on-iPod:ipod6g:OAL">
+    <Title>ipod6g OAL</Title>
+    <Description>OEM adaptation layer for the S5L8702</Description>
+    <Type>BspSpecific</Type>
+    <Location />
+    <SourceCode>
+      <Title>OAL SOURCE CODE</Title>
+      <Path>$(_WINCEROOT)\PLATFORM\IPOD6G\SRC\OAL</Path>
+    </SourceCode>
+  </Item>
+  <Item Id="Item:CE-on-iPod:ipod6g:KITL">
+    <Title>ipod6g serial KITL</Title>
+    <Description>KITL over the dock connector UART (UART0, 115200 8N1)</Description>
+    <Type>BspSpecific</Type>
+    <Location />
+    <SourceCode>
+      <Title>KITL SOURCE CODE</Title>
+      <Path>$(_WINCEROOT)\PLATFORM\IPOD6G\SRC\KITL</Path>
+    </SourceCode>
+  </Item>
+</CatalogFile>

@@ -1,0 +1,30 @@
+!if 0
+ipodlcd.dll - iPod classic LCD display driver (GPE, RAM shadow framebuffer)
+Library set as in the CEonPi raspiBasic_ddi driver.
+!endif
+
+TARGETNAME=ipodlcd
+TARGETTYPE=DYNLINK
+DLLENTRY=_DllMainCRTStartup
+DEFFILE=ipodlcd.def
+
+#
+# Colour bars are shown for this many ms when the driver starts (bring-up
+# check of the panel path). Set BSP_LCD_NOTESTPATTERN=1 to skip them.
+#
+!IF "$(BSP_LCD_NOTESTPATTERN)" != "1"
+CDEFINES=$(CDEFINES) -DLCD_TEST_PATTERN_MS=1500
+!ENDIF
+
+SOURCES= \
+    ipodlcd.cpp \
+    lcdhw.cpp \
+
+TARGETLIBS= \
+    $(_COMMONSDKROOT)\lib\$(_CPUDEPPATH)\ceddk.lib \
+    $(_COMMONSDKROOT)\lib\$(_CPUDEPPATH)\coredll.lib \
+
+SOURCELIBS= \
+    $(_DDGUID) \
+    $(_PUBLICROOT)\common\oak\lib\$(_CPUINDPATH)\gpe.lib \
+

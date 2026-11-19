@@ -1,0 +1,25 @@
+;
+; platform.bib - BSP modules for the ipod6g BSP
+;
+; The OAL (nk.exe) and kitl.dll are added to the image by the common
+; build files. Drivers are added here as they are written.
+;
+
+MODULES
+; Name             Path                                            Memory Type
+; --------------   ---------------------------------------------   ------ ----
+
+; @CESYSGEN IF CE_MODULES_DISPLAY
+IF BSP_NODISPLAY
+    ddi_nop.dll        $(_FLATRELEASEDIR)\ddi_nop.dll                  NK     SHMK
+ELSE
+    ; iPod classic LCD (src\drivers\ipodlcd), loaded by GWES in kernel mode
+    ipodlcd.dll        $(_FLATRELEASEDIR)\ipodlcd.dll                  NK     SHMK
+    ; GDI test screen (src\apps\lcdtest); run from Target Control: s lcdtest
+    lcdtest.exe        $(_FLATRELEASEDIR)\lcdtest.exe                  NK
+ENDIF BSP_NODISPLAY
+; @CESYSGEN ENDIF CE_MODULES_DISPLAY
+
+FILES
+;   Name        Path                                            Memory Flags
+;   ----------  ---------------------------------------------   -----------

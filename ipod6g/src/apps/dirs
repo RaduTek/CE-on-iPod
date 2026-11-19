@@ -1,0 +1,5 @@
+!if 0
+ipod6g test applications
+!endif
+DIRS=\
+    lcdtest \

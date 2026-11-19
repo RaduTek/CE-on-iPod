@@ -1,0 +1,16 @@
+!if 0
+lcdtest.exe - draws a test screen through GDI (display driver bring-up).
+Start it from Platform Builder Target Control: s lcdtest
+Structure as the Microsoft etcha demo (public\common\oak\demos\etcha).
+!endif
+
+TARGETNAME=lcdtest
+TARGETTYPE=PROGRAM
+EXEENTRY=WinMainCRTStartup
+
+SOURCES= \
+    lcdtest.c \
+
+TARGETLIBS= \
+    $(_COMMONSDKROOT)\lib\$(_CPUDEPPATH)\coredll.lib \
+

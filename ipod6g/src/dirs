@@ -1,0 +1,8 @@
+!if 0
+ipod6g BSP sources
+!endif
+DIRS=\
+    oal \
+    kitl \
+    drivers \
+    apps \
