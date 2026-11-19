@@ -11,8 +11,9 @@ changes, and how to build and install it:
 
 ## The change
 
-The change is on the `ce-on-ipod-loadsize` branch of the Rockbox checkout (`C:\dev\rockbox`). It
-is currently uncommitted. It touches two files, both for `IPOD_6G` only. The nano 3G and nano 4G
+The change is commit `bd75172d71` ("ipod6g bootloader: 32 MiB load limit, PLAY boots
+/wince.ipod") on the `ce-on-ipod-loadsize` branch of the Rockbox checkout (`C:\dev\rockbox`),
+on top of `master` at `c6593ee254`. It touches two files, both for `IPOD_6G` only. The nano 3G and nano 4G
 have 32 MB of RAM and keep 8 MiB and their normal boot.
 
 | File | Change |
@@ -51,12 +52,7 @@ fall back to Rockbox.
 Nothing else changes: the checksum, the file format and the jump to 0x08000000 stay the same.
 Normal Rockbox (`rockbox.ipod` under 8 MiB) boots exactly as before.
 
-To commit it, in the Rockbox checkout:
-
-```
-git add bootloader/ipod-s5l87xx.c firmware/target/arm/s5l8702/boot.lds
-git commit -m "ipod6g bootloader: 32 MiB load limit, PLAY boots /wince.ipod"
-```
+To review it: `git show ce-on-ipod-loadsize` in the Rockbox checkout.
 
 ## CE side (already done in this repo)
 
@@ -141,7 +137,8 @@ sudo RBDEV_TARGET=a RBDEV_RESTART=gcc GNU_MIRROR=https://ftp.gnu.org/gnu ./rockb
 ### 4. Build the bootloader
 
 Build outside the source tree, in the WSL home directory, which is much faster than `/mnt/c`. The
-sources are read from the Windows checkout, so the uncommitted change is included:
+sources are read from the Windows checkout, which must have the `ce-on-ipod-loadsize` branch
+checked out:
 
 ```
 mkdir -p ~/build/ipod6g-boot && cd ~/build/ipod6g-boot
@@ -163,11 +160,14 @@ Both addresses should be 0x0A0xxxxx.
 To keep a stock bootloader for rollback, build the unmodified one too:
 
 ```
-cd /mnt/c/dev/rockbox && git stash
+cd /mnt/c/dev/rockbox && git switch master
 mkdir -p ~/build/ipod6g-boot-stock && cd ~/build/ipod6g-boot-stock
 /mnt/c/dev/rockbox/tools/configure --target=ipod6g --type=b && make -j$(nproc)
-cd /mnt/c/dev/rockbox && git stash pop
+cd /mnt/c/dev/rockbox && git switch ce-on-ipod-loadsize
 ```
+
+Run `git switch` from Windows if git in WSL complains about the checkout's ownership or line
+endings.
 
 Alternatively, `mks5lboot --bl-uninst ipod6g` removes the bootloader entirely.
 
