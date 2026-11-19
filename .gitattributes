@@ -21,6 +21,8 @@ makefile     text eol=crlf
 *.html       text eol=crlf
 platform.db  text eol=crlf
 OSDesign.db  text eol=crlf
+# Patches for other trees (Rockbox is LF): stored and checked out byte for byte
+*.patch      -text
 # Binary files: never touch
 *.bmp        binary
 *.suo        binary

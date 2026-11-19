@@ -16,6 +16,10 @@ The change is commit `bd75172d71` ("ipod6g bootloader: 32 MiB load limit, PLAY b
 on top of `master` at `c6593ee254`. It touches two files, both for `IPOD_6G` only. The nano 3G and nano 4G
 have 32 MB of RAM and keep 8 MiB and their normal boot.
 
+The same change is kept in this repo as a patch:
+[`rockbox/0001-ipod6g-bootloader-32-MiB-load-limit-PLAY-boots-wince.patch`](../rockbox/).
+Apply it with `git am` to set up a fresh Rockbox checkout; see [rockbox/README.md](../rockbox/README.md).
+
 | File | Change |
 |-|-|
 | `bootloader/ipod-s5l87xx.c` | `MAX_LOADSIZE` is `32*1024*1024` for `IPOD_6G`. The PLAY selection and the `/wince.ipod` load path are new. |

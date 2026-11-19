@@ -1,0 +1,139 @@
+From bd75172d71431b8c18f7672f1dce8bab3b1e9eeb Mon Sep 17 00:00:00 2001
+From: RaduTek <me@radutek.uk>
+Date: Thu, 19 Nov 2026 23:29:47 +0200
+Subject: [PATCH] ipod6g bootloader: 32 MiB load limit, PLAY boots /wince.ipod
+
+For running a Windows CE kernel next to Rockbox on the iPod classic:
+
+- MAX_LOADSIZE is 32 MiB on IPOD_6G (64 MB RAM), in both the bootloader
+  and boot.lds, where the bootloader BSS starts at DRAM_ORIG + MAX_LOADSIZE.
+  The nano 3G/4G (32 MB RAM) keep 8 MiB.
+- Holding PLAY at power-on loads /wince.ipod (same scramble format as
+  rockbox.ipod) instead of Rockbox. No fallback: a missing or invalid
+  file shows the error and enters USB mode, like a failed rockbox.ipod.
+  All other key combinations behave as before.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ bootloader/ipod-s5l87xx.c            | 60 ++++++++++++++++++++++++----
+ firmware/target/arm/s5l8702/boot.lds |  7 +++-
+ 2 files changed, 58 insertions(+), 9 deletions(-)
+
+diff --git a/bootloader/ipod-s5l87xx.c b/bootloader/ipod-s5l87xx.c
+index b2818fabf1..00093b6fcd 100644
+--- a/bootloader/ipod-s5l87xx.c
++++ b/bootloader/ipod-s5l87xx.c
+@@ -77,8 +77,25 @@
+ /* Safety measure - maximum allowed firmware image size.
+    The largest known current (October 2009) firmware is about 6.2MB so
+    we set this to 8MB.
++   The iPod classic (64MB RAM) allows 32MB so that larger images, such as a
++   Windows CE kernel, can be loaded. Must match MAX_LOADSIZE in
++   firmware/target/arm/s5l8702/boot.lds (the bootloader's BSS starts at
++   DRAM_ORIG + MAX_LOADSIZE).
+ */
++#ifdef IPOD_6G
++#define MAX_LOADSIZE (32*1024*1024)
++#else
+ #define MAX_LOADSIZE (8*1024*1024)
++#endif
++
++#ifdef IPOD_6G
++/* Alternate image: holding PLAY at power-on loads WINCEFILE (a Windows CE
++   kernel, same "scramble -add=ip6g" format as rockbox.ipod) instead of
++   Rockbox. There is no fallback: if it cannot be loaded the bootloader
++   stops with an error (and offers USB mode). */
++#define WINCEFILE       "/wince.ipod"
++#define HAVE_WINCE_BOOT
++#endif
+ 
+ #define LCD_RBYELLOW    LCD_RGBPACK(255,192,0)
+ #define LCD_REDORANGE   LCD_RGBPACK(255,70,0)
+@@ -1007,10 +1024,17 @@ void main(void)
+ #endif
+ 
+     button_init();
++#ifdef HAVE_WINCE_BOOT
++    bool boot_wince = false;
++#endif
+     if (rc == 0) {
+         /* User button selection timeout */
+         while (USEC_TIMER < 400000);
+         int btn = button_read_device();
++#ifdef HAVE_WINCE_BOOT
++        /* PLAY alone: boot Windows CE from WINCEFILE */
++        boot_wince = (btn == BUTTON_PLAY);
++#endif
+         /* This prevents HDD spin-up when the user enters DFU */
+         if (btn == (BUTTON_SELECT|BUTTON_MENU)) {
+             while (button_read_device() == (BUTTON_SELECT|BUTTON_MENU))
+@@ -1201,18 +1225,38 @@ void main(void)
+         fatal_error(ERR_RB);
+     }
+ 
+-    printf("Loading Rockbox...");
+     unsigned char *loadbuffer = (unsigned char *)DRAM_ORIG;
+-    rc = load_firmware(loadbuffer, BOOTFILE, MAX_LOADSIZE);
+ 
+-    if (rc <= EFILE_EMPTY) {
+-        printf("Error!");
+-        printf("Can't load " BOOTFILE ": ");
+-        printf(loader_strerror(rc));
+-        fatal_error(ERR_RB);
++#ifdef HAVE_WINCE_BOOT
++    if (boot_wince) {
++        printf("Loading Windows CE...");
++        /* absolute path: loaded as is, no /.rockbox fallback */
++        rc = load_firmware(loadbuffer, WINCEFILE, MAX_LOADSIZE);
++
++        if (rc <= EFILE_EMPTY) {
++            printf("Error!");
++            printf("Can't load " WINCEFILE ": ");
++            printf(loader_strerror(rc));
++            fatal_error(ERR_RB);
++        }
++
++        printf("Windows CE loaded.");
+     }
++    else
++#endif
++    {
++        printf("Loading Rockbox...");
++        rc = load_firmware(loadbuffer, BOOTFILE, MAX_LOADSIZE);
++
++        if (rc <= EFILE_EMPTY) {
++            printf("Error!");
++            printf("Can't load " BOOTFILE ": ");
++            printf(loader_strerror(rc));
++            fatal_error(ERR_RB);
++        }
+ 
+-    printf("Rockbox loaded.");
++        printf("Rockbox loaded.");
++    }
+ 
+     /* If we get here, we have a new firmware image at 0x08000000, run it */
+     disable_irq();
+diff --git a/firmware/target/arm/s5l8702/boot.lds b/firmware/target/arm/s5l8702/boot.lds
+index 0d0544a62f..d0eed9e8be 100644
+--- a/firmware/target/arm/s5l8702/boot.lds
++++ b/firmware/target/arm/s5l8702/boot.lds
+@@ -12,7 +12,12 @@ OUTPUT_FORMAT(elf32-bigarm)
+ OUTPUT_ARCH(arm)
+ STARTUP(target/arm/s5l8702/crt0.o)
+ 
+-#define MAX_LOADSIZE 8M  /* reserved for loading Rockbox binary */
++/* reserved for loading Rockbox binary; must match bootloader/ipod-s5l87xx.c */
++#ifdef IPOD_6G
++#define MAX_LOADSIZE 32M /* 64MB RAM: room for larger images (e.g. Windows CE) */
++#else
++#define MAX_LOADSIZE 8M
++#endif
+ 
+ #if defined(IPOD_6G) || defined(IPOD_NANO3G) || defined(IPOD_NANO4G)
+ MEMORY
+
+base-commit: c6593ee2540b585d04602854b0c632de759da459
+-- 
+2.51.1.windows.1
+

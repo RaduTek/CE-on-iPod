@@ -48,7 +48,8 @@ display, HDD, PMU/backlight, clickwheel, audio.
   - `src/oal/oalexe/`: links `oal.exe` (nk.exe) with `nkldr`, `oemmain`, `oal_cache_arm926`, ...
   - `src/kitl/`: `kitl.dll`, serial KITL via the stock `oal_kitl.lib` + `kitlSerDrv.c`.
 - `iPodCE/`: sample OS design (headless: kernel, Target Control shell, toolhelp).
-- `docs/bringup.md`: boot chain, wiring, build and test steps.
+- `docs/bringup.md`: boot chain, wiring, build and test steps. `docs/bootloader.md`: Rockbox
+  bootloader build (32 MiB, PLAY -> /wince.ipod); the patch is `rockbox/0001-*.patch` (`git am`).
 
 ## Reference trees (read-only)
 - `../rockbox/`: hardware facts for everything (S5L8702 registers, LCD, ATA, PMU, codec).
