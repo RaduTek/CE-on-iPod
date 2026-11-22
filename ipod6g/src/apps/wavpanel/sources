@@ -1,0 +1,14 @@
+!if 0
+wavpanel.exe - the panel of the iPod's sound driver (ipodwav.dll).
+!endif
+
+TARGETNAME=wavpanel
+TARGETTYPE=PROGRAM
+EXEENTRY=WinMainCRTStartup
+
+SOURCES= \
+    wavpanel.c \
+
+TARGETLIBS= \
+    $(_COMMONSDKROOT)\lib\$(_CPUDEPPATH)\coredll.lib \
+

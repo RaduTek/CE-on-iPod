@@ -11,6 +11,9 @@
     <Feature Name="Item" CatalogItemId="Item:MS:sysgen_commctrl" />
     <Feature Name="Item" CatalogItemId="Item:MS:sysgen_commdlg" />
     <Feature Name="Item" CatalogItemId="Item:MS:sysgen_ctlpnl" />
+    <Feature Name="Item" CatalogItemId="Item:MS:sysgen_audio" />
+    <Feature Name="Item" CatalogItemId="Item:MS:sysgen_fatfs" />
+    <Feature Name="Item" CatalogItemId="Item:MS:sysgen_battery" />
   </FeatureCollection>
   <ConfigurationCollection Name="Configurations" EnforceUniqueItems="False">
     <Configuration Name="Item" TargetBinFilename="nk.bin" BuildType="Debug" FriendlyName="ipod6g ARMV5 Debug">

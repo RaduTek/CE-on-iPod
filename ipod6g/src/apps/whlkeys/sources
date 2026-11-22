@@ -1,0 +1,14 @@
+!if 0
+whlkeys.exe - turns the click wheel driver's events into keys (ipodwhl.dll).
+!endif
+
+TARGETNAME=whlkeys
+TARGETTYPE=PROGRAM
+EXEENTRY=WinMainCRTStartup
+
+SOURCES= \
+    whlkeys.c \
+
+TARGETLIBS= \
+    $(_COMMONSDKROOT)\lib\$(_CPUDEPPATH)\coredll.lib \
+

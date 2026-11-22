@@ -1,0 +1,18 @@
+!if 0
+ipodwhl.dll - the iPod's click wheel: stream driver "WHL1:".
+See ipodwhl.c and whlcore.c.
+!endif
+
+TARGETNAME=ipodwhl
+TARGETTYPE=DYNLINK
+DLLENTRY=_DllMainCRTStartup
+DEFFILE=ipodwhl.def
+
+SOURCES= \
+    ipodwhl.c \
+    whlcore.c \
+
+TARGETLIBS= \
+    $(_COMMONSDKROOT)\lib\$(_CPUDEPPATH)\ceddk.lib \
+    $(_COMMONSDKROOT)\lib\$(_CPUDEPPATH)\coredll.lib \
+

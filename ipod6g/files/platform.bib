@@ -6,6 +6,21 @@
 ;
 
 MODULES
+    ; the sound driver (kernel mode)
+    ipodwav.dll        $(_FLATRELEASEDIR)\ipodwav.dll                  NK     SHK
+    ; the disk driver (kernel mode, read only)
+    ipoddsk.dll        $(_FLATRELEASEDIR)\ipoddsk.dll                  NK     SHK
+    ; battery and clock driver (kernel mode), the battery icon in the taskbar
+    battdrvr.dll       $(_FLATRELEASEDIR)\battdrvr.dll                 NK     SHK
+    battray.exe        $(_FLATRELEASEDIR)\battray.exe                  NK
+    pwrinfo.exe        $(_FLATRELEASEDIR)\pwrinfo.exe                  NK
+    dskinfo.exe        $(_FLATRELEASEDIR)\dskinfo.exe                  NK
+    wavpanel.exe       $(_FLATRELEASEDIR)\wavpanel.exe                 NK
+    ; restarts the iPod
+    restart.exe        $(_FLATRELEASEDIR)\restart.exe                  NK
+    ; click wheel: driver (kernel mode) and the program that turns it into keys
+    ipodwhl.dll        $(_FLATRELEASEDIR)\ipodwhl.dll                  NK     SHK
+    whlkeys.exe        $(_FLATRELEASEDIR)\whlkeys.exe                  NK
 ; Name             Path                                            Memory Type
 ; --------------   ---------------------------------------------   ------ ----
 
@@ -23,3 +38,10 @@ ENDIF BSP_NODISPLAY
 FILES
 ;   Name        Path                                            Memory Flags
 ;   ----------  ---------------------------------------------   -----------
+; desktop shortcut of the click wheel's counts
+    whlkeys.lnk    $(_FLATRELEASEDIR)\whlkeys.lnk                      NK
+; desktop shortcut "Restart"
+    restart.lnk    $(_FLATRELEASEDIR)\restart.lnk                      NK
+    wavpanel.lnk   $(_FLATRELEASEDIR)\wavpanel.lnk                 NK
+    dskinfo.lnk    $(_FLATRELEASEDIR)\dskinfo.lnk                  NK
+    pwrinfo.lnk    $(_FLATRELEASEDIR)\pwrinfo.lnk                  NK

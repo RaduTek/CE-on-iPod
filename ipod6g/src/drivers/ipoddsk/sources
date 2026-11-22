@@ -1,0 +1,18 @@
+!if 0
+ipoddsk.dll - the iPod's disk as a Windows CE block device, read only:
+stream driver "DSK1:" for the storage manager. See ipoddsk.c and ipodata.c.
+!endif
+
+TARGETNAME=ipoddsk
+TARGETTYPE=DYNLINK
+DLLENTRY=_DllMainCRTStartup
+DEFFILE=ipoddsk.def
+
+SOURCES= \
+    ipoddsk.c \
+    ipodata.c \
+
+TARGETLIBS= \
+    $(_COMMONSDKROOT)\lib\$(_CPUDEPPATH)\ceddk.lib \
+    $(_COMMONSDKROOT)\lib\$(_CPUDEPPATH)\coredll.lib \
+

@@ -1,0 +1,15 @@
+!if 0
+dskinfo.exe - the panel of the iPod's disk driver (ipoddsk.dll).
+!endif
+
+TARGETNAME=dskinfo
+TARGETTYPE=PROGRAM
+EXEENTRY=WinMainCRTStartup
+
+SOURCES= \
+    dskinfo.c \
+
+TARGETLIBS= \
+    $(_COMMONOAKROOT)\lib\$(_CPUDEPPATH)\storeapi.lib \
+    $(_COMMONSDKROOT)\lib\$(_CPUDEPPATH)\coredll.lib \
+

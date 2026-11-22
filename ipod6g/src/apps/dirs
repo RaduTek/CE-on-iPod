@@ -3,3 +3,9 @@ ipod6g test applications
 !endif
 DIRS=\
     lcdtest \
+    battray \
+    whlkeys \
+    restart \
+    pwrinfo \
+    dskinfo \
+    wavpanel \

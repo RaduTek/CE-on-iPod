@@ -1,0 +1,29 @@
+!if 0
+ipodwav.dll - the iPod's Windows CE sound driver: Microsoft's sample driver
+wavedev2\virtual with the iPod's audio path (ipodpcm.c) as its hardware layer.
+!endif
+
+TARGETNAME=ipodwav
+TARGETTYPE=DYNLINK
+DLLENTRY=_DllMainCRTStartup
+DEFFILE=ipodwav.def
+
+CDEFINES=$(CDEFINES) -D_WINCEOSVER=$(_WINCEOSVER)
+
+SOURCES= \
+    streamclass.cpp \
+    wavemain.cpp \
+    devctxt.cpp \
+    strmctxt.cpp \
+    input.cpp \
+    output.cpp \
+    mixerdrv.cpp \
+    hwctxt.cpp \
+    dtpnotify.cpp \
+    wavertgctrl.cpp \
+    ipodpcm.c \
+
+TARGETLIBS= \
+    $(_COMMONSDKROOT)\lib\$(_CPUDEPPATH)\ceddk.lib \
+    $(_COMMONSDKROOT)\lib\$(_CPUDEPPATH)\coredll.lib \
+

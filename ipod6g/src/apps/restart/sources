@@ -1,0 +1,14 @@
+!if 0
+restart.exe - restarts the iPod from Windows CE.
+!endif
+
+TARGETNAME=restart
+TARGETTYPE=PROGRAM
+EXEENTRY=WinMainCRTStartup
+
+SOURCES= \
+    restart.c \
+
+TARGETLIBS= \
+    $(_COMMONSDKROOT)\lib\$(_CPUDEPPATH)\coredll.lib \
+

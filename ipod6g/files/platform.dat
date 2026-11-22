@@ -1,3 +1,12 @@
 ;
 ; platform.dat - BSP file system initialization (none yet)
 ;
+
+; the click wheel's counts on the desktop
+Directory("\Windows\LOC_DESKTOP_DIR"):-File("Wheel.lnk","\Windows\whlkeys.lnk")
+
+; Restart on the desktop
+Directory("\Windows\LOC_DESKTOP_DIR"):-File("Restart.lnk","\Windows\restart.lnk")
+Directory("\Windows\LOC_DESKTOP_DIR"):-File("Sound check.lnk","\Windows\wavpanel.lnk")
+Directory("\Windows\LOC_DESKTOP_DIR"):-File("iPod disk.lnk","\Windows\dskinfo.lnk")
+Directory("\Windows\LOC_DESKTOP_DIR"):-File("Power status.lnk","\Windows\pwrinfo.lnk")

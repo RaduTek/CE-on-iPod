@@ -32,6 +32,11 @@ These are hardware features that are functional
 |-|-|-|
 | UART | Basic | Dock connector serial (UART0), 115200 8N1, no flow control. Used for KITL debugger connection with Visual Studio |
 | Display | Basic | 320x240 RGB565 only. Screen updates are pushed to the LCD by the CPU, no DMA or acceleration whatsoever |
+| Audio output | Basic | I2S + DMA into the codec, at the sample rate Rockbox left it at. Needs Rockbox to have run first (Windows CE started from Rockbox); not tried from the bootloader |
+| ATA HDD | Read only | PATA (not CE-ATA), PIO, about 1.8 MB/s (measured on an iFlash). Mounted as \iPod |
+| Battery | Basic | Level and charging through the PMU, taskbar icon |
+| Real-time clock | Basic | Time read from the PMU at start-up |
+| Clickwheel | Basic | Wheel and buttons as keys. Needs the wheel controller running as Rockbox leaves it |
 
 ### Future
 
@@ -39,10 +44,8 @@ These are hardware features that are functional
 
 | Feature | Comments |
 |-|-|
-| ATA HDD | Mount the FAT32 partition of the hard drive (PATA or CE-ATA, depending on the model) |
-| Battery | Battery level and charging status through the PMU, also needed for the backlight and real-time clock |
-| Clickwheel | Wheel and buttons as keyboard input devices |
-| Audio output | Headphone output through the audio codec |
+| ATA HDD | Writing; CE-ATA models |
+| Starting from the bootloader | Codec and click wheel set-up of their own, for the PLAY start where Rockbox never runs |
 | USB Function | Let the iPod be connected as a USB device to a computer (for Mass Storage) |
 
 ## Notes

@@ -1,0 +1,14 @@
+;
+; ipoddsk.def - exports of the iPod's disk driver (stream prefix DSK)
+;
+LIBRARY IPODDSK
+
+EXPORTS
+    DSK_Init
+    DSK_Deinit
+    DSK_Open
+    DSK_Close
+    DSK_Read
+    DSK_Write
+    DSK_Seek
+    DSK_IOControl

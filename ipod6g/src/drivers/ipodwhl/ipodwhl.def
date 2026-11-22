@@ -1,0 +1,13 @@
+;
+; ipodwhl.def - exports of the click wheel driver (stream prefix WHL)
+;
+LIBRARY IPODWHL
+EXPORTS
+    WHL_Init
+    WHL_Deinit
+    WHL_Open
+    WHL_Close
+    WHL_Read
+    WHL_Write
+    WHL_Seek
+    WHL_IOControl
