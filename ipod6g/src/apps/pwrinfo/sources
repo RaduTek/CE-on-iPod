@@ -1,0 +1,14 @@
+!if 0
+pwrinfo.exe - what Windows says about the clock and the battery.
+!endif
+
+TARGETNAME=pwrinfo
+TARGETTYPE=PROGRAM
+EXEENTRY=WinMainCRTStartup
+
+SOURCES= \
+    pwrinfo.c \
+
+TARGETLIBS= \
+    $(_COMMONSDKROOT)\lib\$(_CPUDEPPATH)\coredll.lib \
+

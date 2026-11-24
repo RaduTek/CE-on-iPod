@@ -3,3 +3,7 @@ ipod6g drivers
 !endif
 DIRS=\
     ipodlcd \
+    wavedev \
+    ipoddsk \
+    battery \
+    ipodwhl \

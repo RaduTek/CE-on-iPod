@@ -1,0 +1,14 @@
+!if 0
+battray.exe - a battery level icon in the taskbar, always there.
+!endif
+
+TARGETNAME=battray
+TARGETTYPE=PROGRAM
+EXEENTRY=WinMainCRTStartup
+
+SOURCES= \
+    battray.c \
+
+TARGETLIBS= \
+    $(_COMMONSDKROOT)\lib\$(_CPUDEPPATH)\coredll.lib \
+

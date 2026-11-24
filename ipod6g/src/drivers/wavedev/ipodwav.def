@@ -1,0 +1,11 @@
+;
+; ipodwav.def - exports of the iPod's sound driver (stream prefix WAV)
+;
+LIBRARY IPODWAV
+
+EXPORTS
+    WAV_Init
+    WAV_Deinit
+    WAV_Open
+    WAV_Close
+    WAV_IOControl

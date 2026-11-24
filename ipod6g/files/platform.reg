@@ -28,3 +28,112 @@ IF BSP_NODISPLAY !
     "Animate"=dword:0
 ENDIF BSP_NODISPLAY !
 ; @CESYSGEN ENDIF CE_MODULES_DISPLAY
+
+; The sound driver ipodwav.dll (src\drivers\wavedev). The IClass lines are
+; those of Microsoft's own entry for its sample driver (common.reg): they
+; are how Windows' wave API finds a sound device.
+[HKEY_LOCAL_MACHINE\Drivers\BuiltIn\IpodWav]
+   "Prefix"="WAV"
+   "Dll"="ipodwav.dll"
+   "Index"=dword:1
+   "Order"=dword:0
+   "IClass"=multi_sz:"{E92BC203-8354-4043-A06F-2A170BF6F227}",
+                     "{37168569-61C4-45fd-BD54-9442C7DBA46F}"
+
+; Windows makes its own sounds: the start-up sound and everything else of
+; its "all sounds" scheme (".DefaultSounds" is Microsoft's quieter choice:
+; start-up and message boxes only). Key clicks and screen taps stay off.
+; "Mute" 7 = notifications, programs and events all play.
+[HKEY_LOCAL_MACHINE\Snd\Event]
+    ".Scheme"=".AllSounds"
+[HKEY_CURRENT_USER\ControlPanel\Volume]
+    "Key"=dword:0
+    "Screen"=dword:0
+    "Mute"=dword:7
+
+; The iPod's disk, READ ONLY (src\drivers\ipoddsk). The IClass line is the
+; one of Microsoft's own block drivers: it is how the storage manager finds
+; a disk. "Ioctl" 4 = the device manager's call after loading
+; (DISK_IOCTL_INITIALIZED), as for those drivers.
+[HKEY_LOCAL_MACHINE\Drivers\BuiltIn\IpodDisk]
+    "Dll"="ipoddsk.dll"
+    "Prefix"="DSK"
+    "Index"=dword:1
+    "Order"=dword:50
+    "Ioctl"=dword:4
+    "IClass"=multi_sz:"{A4E7EDDA-E575-4252-9D6B-4195D48BB865}"
+    "Profile"="iPodDisk"
+    "FriendlyName"="iPod disk (read only)"
+
+; How the storage manager treats that disk: mount what is there under \iPod,
+; never partition, never format. "Attrib" 1 = a read-only store: that is the
+; value the storage manager itself looks at (its storedisk.cpp), so programs
+; are told "write protected" by Windows instead of finding out from the
+; driver's refusal.
+[HKEY_LOCAL_MACHINE\System\StorageManager\Profiles\iPodDisk]
+    "Name"="iPod disk"
+    "Folder"="iPod"
+    "AutoMount"=dword:1
+    "AutoPart"=dword:0
+    "AutoFormat"=dword:0
+    "Attrib"=dword:1
+
+; The FAT file system on it: no scan, no format, no reading ahead of the file
+; allocation table at mount (tens of MB on a big card), and small caches (sectors are 4096 bytes:
+; 64 = 256 KB, 128 = 512 KB).
+[HKEY_LOCAL_MACHINE\System\StorageManager\Profiles\iPodDisk\FATFS]
+    "DisableAutoScan"=dword:1
+    "DisableAutoFormat"=dword:1
+    "DisableFormat"=dword:1
+    "EnableFatCacheWarm"=dword:0
+    "EnableDataCacheWarm"=dword:0
+    "EnableWriteBack"=dword:0
+    "FatCacheSize"=dword:40
+    "DataCacheSize"=dword:80
+
+; The battery driver (src\drivers\battery). These entries are Microsoft's own
+; (public\common\oak\drivers\battdrvr\battdrvr.reg), which no file of the
+; image brings along:
+;   - the event the battery functions wait on has to be named here, or the
+;     driver's start-up gives up at its first step;
+;   - "Flags" 8 = its entry points have no prefix; "Ioctl" 290418 = the call
+;     the device manager makes after loading (IOCTL_BATTERY_POSTINIT), which
+;     is what starts the driver's polling; the IClass is BATTERY_DRIVER_CLASS.
+; It is asked for the status every 10 seconds and measures at most every 20.
+[HKEY_LOCAL_MACHINE\System\Events]
+    "SYSTEM/BatteryAPIsReady"="Battery Interface APIs"
+[HKEY_LOCAL_MACHINE\Drivers\BuiltIn\Battery]
+    "Prefix"="BAT"
+    "Dll"="battdrvr.dll"
+    "Flags"=dword:8
+    "Order"=dword:0
+    "Ioctl"=dword:290418
+    "IClass"="{DD176277-CD34-4980-91EE-67DBEF3D8913}"
+    "PollInterval"=dword:2710
+
+; the battery level icon in the taskbar, started with Windows
+[HKEY_LOCAL_MACHINE\init]
+    "Launch85"="battray.exe"
+    "Depend85"=hex:14,00,1e,00
+
+; On battery, do what Windows did until now on external power: the same idle
+; times, and never suspend (this kernel layer has no suspend).
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Power\Timeouts]
+    "BattUserIdle"=dword:3c
+    "BattSystemIdle"=dword:12c
+    "BattSuspend"=dword:0
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Power]
+    "BattPowerOff"=dword:0
+    "ExtPowerOff"=dword:0
+
+; The click wheel: stream driver WHL1: (src\drivers\ipodwhl) reads the
+; wheel's controller, whlkeys.exe (src\apps\whlkeys), started with Windows,
+; turns what it reads into keys.
+[HKEY_LOCAL_MACHINE\Drivers\BuiltIn\Wheel]
+    "Dll"="ipodwhl.dll"
+    "Prefix"="WHL"
+    "Index"=dword:1
+    "Order"=dword:46
+[HKEY_LOCAL_MACHINE\init]
+    "Launch86"="whlkeys.exe"
+    "Depend86"=hex:14,00,1e,00
