@@ -126,6 +126,8 @@ display, HDD, PMU/backlight, clickwheel, audio.
   I2SCLKDIV was 272` (ROLO) / `was 0` (cold), then `ready, I2SCLKDIV 272 = 44118 Hz`. The codec
   answers after reset on a cold start, so its supply is on without any power-chip change.
   Load order I2C1: (0) -> battery (1) -> sound (2) confirmed in the log.
+- **Next (planned 2026-11-26): port the sound driver to Microsoft's wave MDD + our PDD** (CEonPi
+  model, drops `getms.ps1`). Full plan: `docs/audio-mdd-plan.md`.
 
 ## Display driver (src/drivers/ipodlcd) - test pattern verified on hardware 2026-11-19
 - `ipodlcd.dll`, GPE flat driver (structure from CEonPi raspiBasic_ddi), loaded by GWES (SHMK).
