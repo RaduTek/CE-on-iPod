@@ -91,6 +91,16 @@ ENDIF BSP_NODISPLAY !
     "FatCacheSize"=dword:40
     "DataCacheSize"=dword:80
 
+; I2C bus 0 (src\drivers\ipodi2c): stream driver I2C1: with Microsoft's I2C
+; interface (i2c.h). The power chip and the codec share this bus; every
+; driver that talks to them goes through I2C1:. "Order" 0 loads it before
+; its users (battery driver: Order 1).
+[HKEY_LOCAL_MACHINE\Drivers\BuiltIn\I2C0]
+    "Prefix"="I2C"
+    "Dll"="ipodi2c.dll"
+    "Index"=dword:1
+    "Order"=dword:0
+
 ; The battery driver (src\drivers\battery). These entries are Microsoft's own
 ; (public\common\oak\drivers\battdrvr\battdrvr.reg), which no file of the
 ; image brings along:
@@ -106,7 +116,7 @@ ENDIF BSP_NODISPLAY !
     "Prefix"="BAT"
     "Dll"="battdrvr.dll"
     "Flags"=dword:8
-    "Order"=dword:0
+    "Order"=dword:1
     "Ioctl"=dword:290418
     "IClass"="{DD176277-CD34-4980-91EE-67DBEF3D8913}"
     "PollInterval"=dword:2710

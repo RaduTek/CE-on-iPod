@@ -16,8 +16,13 @@ display, HDD, PMU/backlight, clickwheel, audio.
   support installed) at `C:\WINCE700`. `ipod6g/` must appear as `C:\WINCE700\platform\ipod6g`.
   `iPodCE/` is the sample OS design.
 - The VM's `C:\WINCE700` is mapped on the host as `Z:` (read-only reference).
-- The user builds, copies `wince.ipod` to the root of the iPod disk, boots it holding PLAY and reports
-  results (serial log, KITL output, build logs).
+- The user builds, copies `wince.ipod` to the iPod disk and reports results (serial log, KITL
+  output, build logs). **Since 2026-11-26 the user tests by launching `wince.ipod` from Rockbox
+  (ROLO)**, which is easier and needs no custom bootloader. The PLAY start (custom bootloader,
+  docs/bootloader.md) must keep working but is not routinely tested. A ROLO start leaves hardware
+  that Rockbox set up (codec, I2S, wheel); the bootloader does not set up the codec/I2S. Drivers
+  should set up what they need rather than rely on either.
+- Rockbox source: `C:\dev\rockbox` (branch `ce-on-ipod-loadsize`), not `../rockbox/`.
 - After every change, say exactly what to build, what to expect, and which log lines or
   behaviour confirm success. Prefer small, separately testable changes.
 - Never claim hardware behaviour that has not been verified. State assumptions and say how to
@@ -107,6 +112,14 @@ display, HDD, PMU/backlight, clickwheel, audio.
   kernel's background IST for unknown IRQs; software-only, no hardware IRQ. intr.c now accepts
   all SYSINTRs below SYSINTR_FIRMWARE (except RESCHED) as no-ops. (Same message is unexplained
   in the CEonPi notes; this is its cause there too.)
+- 2026-11-26: **Shared I2C driver `ipodi2c.dll` (`I2C1:`, Microsoft i2c.h interface) verified**
+  from both ROLO and cold (PLAY) start: bus pins `33331222` both ways, the power chip's clock read
+  and battery measurement (writes to 0x52-0x54) work through it. battdrvr is now its client.
+- 2026-11-26: **cold start vs ROLO compared**: disk, LCD (same `LCD_CON 0x80100db0`), click wheel
+  (bootloader's `button_init` starts it), I2C, battery all work both ways. Only sound differs:
+  cold start gives `ipodwav: I2SCLKDIV is 0` and the driver does not load (the bootloader never
+  sets up the codec/I2S). `DEVICE!InitDeviceContent ... 'Notify', error code 2404` appears in
+  both (Microsoft's notify driver, not ours).
 
 ## Display driver (src/drivers/ipodlcd) - test pattern verified on hardware 2026-11-19
 - `ipodlcd.dll`, GPE flat driver (structure from CEonPi raspiBasic_ddi), loaded by GWES (SHMK).

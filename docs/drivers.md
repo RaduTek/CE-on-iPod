@@ -56,10 +56,37 @@ the click wheel in particular will need their own set-up there (see each
   Windows lists; "Verify file" reads `\iPod\wince.ipod` to its end and
   checks its checksum and speed).
 
+## I2C bus 0: `ipodi2c.dll` (`src\drivers\ipodi2c`)
+
+- `I2C1:`, the only code that drives I2C controller 0. The power chip
+  (PCF50635, 7-bit address 0x73) and the codec (CS42L55, 0x4A) share this
+  bus, so every driver that talks to either goes through `I2C1:`, one
+  transfer at a time.
+- Microsoft's I2C interface (`public\common\oak\inc\i2c.h`): `I2cOpen`,
+  `I2cSetSlaveAddress`, `I2cRead`/`I2cWrite` at a register. As with
+  Microsoft's own I2C driver, only kernel-mode drivers may open it. 7-bit
+  addresses and 1-byte register numbers only; the speed and timeout settings
+  are accepted but not used.
+- The controller code (`i2chw.c`) is the battery driver's former bus layer:
+  polled, the controller's clock on only during a transfer, a read is
+  register number + stop + a new start (no repeated start), every wait
+  bounded, and the bus is released after a failure. Writes are new.
+- **Allowlist** (`g_allow` in `ipodi2c.c`): only the two chips above.
+  The power chip takes writes only to 0x52-0x54 (battery measurement), so
+  its supply and charger settings cannot be changed by a wrong caller. The
+  codec takes writes to any register. Anything else is refused before the
+  bus is touched (`ERROR_ACCESS_DENIED`, counted as "refused").
+- `IOCTL_IPODI2C_GET_STATE` (`ipodi2c.h`): reads, writes, errors, refusals,
+  and the chip, register, step and code of the last failure. The first 16
+  failures are also written to the debug output (`ipodi2c: ... failed`).
+- **Expects:** the bus pins set up (PCON3) as Rockbox and the bootloader
+  leave them. It never sets them itself: with other pins it refuses every
+  transfer (code 2).
+
 ## Clock and battery: `battdrvr.dll` (`src\drivers\battery`)
 
 - Microsoft's battery driver library (`battdrvr_mdd.lib`) with the iPod's
-  half in `ipodbatt.c`, over the power chip's I2C bus layer `ipodi2c.c`.
+  half in `ipodbatt.c`, reaching the power chip through `I2C1:`.
 - Clock: the power chip's clock is read once at start-up and given to
   Windows (`SetLocalTime`); after that Windows' clock runs on the kernel's
   tick. The chip's clock is never set.
@@ -69,10 +96,12 @@ the click wheel in particular will need their own set-up there (see each
   with Rockbox's table for this iPod. "External power" is the chip's
   charger status, "charging" the processor pin Rockbox uses for it.
 - `battray.exe`: the battery icon in the taskbar.
-- **Expects:** the I2C controller usable as Rockbox left it.
+- **Expects:** `I2C1:` loaded first (registry `Order` 0, the battery
+  driver 1). If it is not there, the clock is read on the first status
+  request that can open it.
 - **Check:** "Power status" on the desktop (Windows' clock and power
   status, the chip's clock as read at start-up, measurements, charger,
-  bus errors).
+  and the `I2C1:` counters).
 
 ## Click wheel: `ipodwhl.dll` and `whlkeys.exe` (`src\drivers\ipodwhl`, `src\apps\whlkeys`)
 
