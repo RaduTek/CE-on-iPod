@@ -3,10 +3,23 @@
 //
 // The path is the one Rockbox plays music through (first tried under
 // Windows CE with a plain tone): DMA controller 0, channel 2 -> I2S 0
-// -> CS42L55 codec, 24-bit samples in 32-bit words. What Rockbox set up before
-// it started Windows CE is left alone: the codec (powered, unmuted, at Rockbox's
-// volume, and the clock master) and the clocks. The sample rate is whatever
-// Rockbox left the codec at; it is read back from I2SCLKDIV (12 MHz / rate).
+// -> CS42L55 codec, 24-bit samples in 32-bit words.
+//
+// At start-up the driver sets the path up itself, the same whether Rockbox
+// ran before (ROLO) or not (cold start: the bootloader never touches the
+// codec, which stays in reset). The steps are Rockbox's (pcm-s5l8702.c
+// sink_dma_init and sink_set_freq, cscodec-6g.c, cs42l55.c audiohw_preinit
+// and audiohw_postinit):
+//   - I2S 0: its clock on, transmitter 24 bits in 32, I2SCLKDIV 272;
+//   - the codec's master clock (CLKCON3, low half: OSC0, 12 MHz);
+//   - the codec's reset (port 3 pin 3) low for 10 ms, then high;
+//   - through the I2C driver "I2C1:": the codec's version register read
+//     (it answers), Rockbox's register sequence (clock master, 44.1 kHz,
+//     powered, outputs muted), then headphones at IPODPCM_HP_DB, unmuted.
+// The I2S pins are not touched: Rockbox's GPIO table, which the bootloader
+// applies too, sets them up.
+// Not done: the codec's supply (Rockbox does not know which power chip
+// output it is either; it is assumed on), headphone detection, recording.
 //
 // Two pages of sound, each one DMA list item, linked to each other: the DMA
 // controller plays page 0, 1, 0, 1 ... by itself, without an interrupt. The
@@ -21,14 +34,23 @@
 #include <ceddk.h>
 #include <pkfuncs.h>
 
+#include <i2c.h>
+
 #include <ipodpcm.h>
+#include <ipodi2c.h>
 
 // physical addresses (Rockbox firmware/export/s5l87xx.h, S5L8702)
 #define PA_CLK              0x3C500000
 #define PA_I2S              0x3CA00000
 #define PA_DMAC0            0x38200000
+#define PA_GPIO             0x3CF00000
 
-#define CLK_CLKCON3         0x0C
+#define GPIO_PDAT3          0x64        // bit 3: the codec's reset (0 = in reset)
+#define PDAT3_CODEC_RESET   (1 << 3)
+
+#define CLK_CLKCON3         0x0C        // low half: the codec's master clock (0 = OSC0, bit 15 = off)
+#define CLKCON3_LOW_MASK    0x0000FFFF
+#define CLKCON3_LOW_OFF     0x00008000
 #define CLK_PWRCON0         0x48        // bit 25 = DMA controller 0 clock gate
 #define CLK_PWRCON1         0x4C        // bit 7 = I2S 0 clock gate
 #define PWRCON0_DMAC0       (1 << 25)
@@ -44,6 +66,7 @@
 #define I2STXCOM_STOP       0x0A
 #define I2STXCOM_RUN        0x0E
 #define I2S_MCLK_HZ         12000000
+#define I2S_DIV             (I2S_MCLK_HZ / IPODPCM_RATE)    // 272
 
 #define DMAC_INTTCCLR       0x08
 #define DMAC_INTERRCLR      0x10
@@ -74,10 +97,62 @@
 #define IDLE_WAIT_LOOPS     200000
 #define STALL_MS            500
 
-static volatile UINT32 *g_pClk = NULL, *g_pI2s = NULL, *g_pDmac = NULL;
+// CS42L55 registers (Rockbox firmware/export/cs42l55.h)
+#define CS_CHIPVERSION      0x01
+#define CS_HPACTL           0x1A
+#define CS_HPBCTL           0x1B
+#define CS_HP_LEVEL         ((BYTE)((IPODPCM_HP_DB) & 0x7F))   // dB, two's complement, 7 bits
+
+typedef struct {
+    BYTE    reg;
+    BYTE    value;
+} CS_WRITE;
+
+// Rockbox's audiohw_preinit, in its order
+static const CS_WRITE g_csPreinit[] = {
+    { 0x00, 0x99 },     // HIDDENCTL: unlock
+    { 0x2E, 0x30 },     // hidden registers, Rockbox's (and Apple's) values
+    { 0x32, 0x07 },
+    { 0x33, 0xFF },
+    { 0x34, 0xF8 },
+    { 0x35, 0xDC },
+    { 0x36, 0xFC },
+    { 0x37, 0xAC },
+    { 0x3A, 0xF8 },
+    { 0x3C, 0xD3 },
+    { 0x3D, 0x23 },
+    { 0x3E, 0x81 },
+    { 0x3F, 0x46 },
+    { 0x00, 0x00 },     // HIDDENCTL: lock
+    { 0x03, 0xAF },     // PWRCTL2: line outputs always off, headphones never off
+    { 0x04, 0x2E },     // CLKCTL1: clock master, SCLK/MCLK before, MCLK / 2
+    { 0x05, 0x0B },     // CLKCTL2: 44.1 kHz
+    { 0x07, 0x1C },     // MISCCTL: undocumented bit 4, analog zero cross, digital soft ramp
+    { 0x02, 0x0F },     // PWRCTL1: charge pump, ADCs and codec powered down
+    { 0x0F, 0x83 },     // PLAYCTL: DSP off, master A and B muted
+    { 0x0B, 0x00 },     // PGAACTL
+    { 0x0C, 0x00 },     // PGABCTL
+    { 0x1A, 0x80 },     // HPACTL: muted
+    { 0x1B, 0x80 },     // HPBCTL: muted
+    { 0x1C, 0x80 },     // LINEACTL: muted
+    { 0x1D, 0x80 },     // LINEBCTL: muted
+    { 0x02, 0x0E },     // PWRCTL1: codec powered up (charge pump and ADCs still down)
+};
+
+// Rockbox's audiohw_postinit (headphones at our level, written before
+// these, instead of 0 dB followed by the user's volume)
+static const CS_WRITE g_csPostinit[] = {
+    { 0x1C, 0x00 },     // LINEACTL: 0 dB, unmuted (the line outputs stay powered down)
+    { 0x1D, 0x00 },     // LINEBCTL
+    { 0x06, 0x30 },     // CLSHCTL: adaptive power from the signal
+    { 0x0F, 0x80 },     // PLAYCTL: master A and B unmuted, DSP still off
+};
+
+static volatile UINT32 *g_pClk = NULL, *g_pI2s = NULL, *g_pDmac = NULL, *g_pGpio = NULL;
 #define RCLK(off)           g_pClk[(off) >> 2]
 #define RI2S(off)           g_pI2s[(off) >> 2]
 #define RDMA(off)           g_pDmac[(off) >> 2]
+#define RGPIO(off)          g_pGpio[(off) >> 2]
 
 static BYTE    *g_pBlock = NULL;        // the DMA memory (not cached)
 static ULONG    g_bufPhys = 0;
@@ -118,6 +193,88 @@ static DWORD PlayingPage(DWORD src)
     return ((src - g_bufPhys) >= PAGE1_OFFSET) ? 1 : 0;
 }
 
+// One codec register (the I2C handle is set to the codec). FALSE = failed,
+// noted in g_st.
+static BOOL CsWrite(HANDLE hBus, BYTE reg, BYTE value)
+{
+    if (!I2cWrite(hBus, reg, &value, 1))
+    {
+        g_st.codecStep = IPODPCM_CODEC_WRITE;
+        g_st.codecReg = reg;
+        g_st.codecError = GetLastError();
+        return FALSE;
+    }
+    g_st.codecWrites++;
+    return TRUE;
+}
+
+static BOOL CsWriteList(HANDLE hBus, const CS_WRITE *pList, DWORD n)
+{
+    DWORD i;
+
+    for (i = 0; i < n; i++)
+    {
+        if (!CsWrite(hBus, pList[i].reg, pList[i].value))
+            return FALSE;
+    }
+    return TRUE;
+}
+
+// The codec's clock and reset, then its registers. FALSE = failed (g_st.codecStep).
+static BOOL CodecSetup(void)
+{
+    HANDLE hBus;
+    BYTE ver = 0;
+    BOOL ok;
+
+    // the master clock: off, a moment, on (Rockbox sink_set_freq)
+    RCLK(CLK_CLKCON3) = (RCLK(CLK_CLKCON3) & ~CLKCON3_LOW_MASK) | CLKCON3_LOW_OFF;
+    Sleep(1);
+    RCLK(CLK_CLKCON3) &= ~CLKCON3_LOW_OFF;
+
+    // reset: low 10 ms, high (Rockbox audiohw_preinit)
+    RGPIO(GPIO_PDAT3) &= ~PDAT3_CODEC_RESET;
+    Sleep(10);
+    RGPIO(GPIO_PDAT3) |= PDAT3_CODEC_RESET;
+    Sleep(1);
+
+    hBus = I2cOpen(IPODI2C_DEVICE);
+    if (hBus == INVALID_HANDLE_VALUE)
+    {
+        g_st.codecStep = IPODPCM_CODEC_OPEN;
+        g_st.codecError = GetLastError();
+        return FALSE;
+    }
+    if (!I2cSetSlaveAddress(hBus, IPODI2C_ADDR_CODEC))
+    {
+        g_st.codecStep = IPODPCM_CODEC_ADDRESS;
+        g_st.codecError = GetLastError();
+        I2cClose(hBus);
+        return FALSE;
+    }
+    if (!I2cRead(hBus, CS_CHIPVERSION, &ver, 1))
+    {
+        g_st.codecStep = IPODPCM_CODEC_ID;
+        g_st.codecReg = CS_CHIPVERSION;
+        g_st.codecError = GetLastError();
+        I2cClose(hBus);
+        return FALSE;
+    }
+    g_st.codecVersion = ver;
+
+    ok = CsWriteList(hBus, g_csPreinit, sizeof(g_csPreinit) / sizeof(g_csPreinit[0]));
+    if (ok)
+    {
+        Sleep(20);                      // Rockbox unmutes a little later too
+        g_st.hpReg = CS_HP_LEVEL;
+        ok = CsWrite(hBus, CS_HPACTL, CS_HP_LEVEL)
+          && CsWrite(hBus, CS_HPBCTL, CS_HP_LEVEL)
+          && CsWriteList(hBus, g_csPostinit, sizeof(g_csPostinit) / sizeof(g_csPostinit[0]));
+    }
+    I2cClose(hBus);
+    return ok;
+}
+
 BOOL IpodPcm_Init(void)
 {
     DWORD div;
@@ -130,26 +287,35 @@ BOOL IpodPcm_Init(void)
     g_pClk = (volatile UINT32 *)MapReg(PA_CLK);
     g_pI2s = (volatile UINT32 *)MapReg(PA_I2S);
     g_pDmac = (volatile UINT32 *)MapReg(PA_DMAC0);
-    if (g_pClk == NULL || g_pI2s == NULL || g_pDmac == NULL)
+    g_pGpio = (volatile UINT32 *)MapReg(PA_GPIO);
+    if (g_pClk == NULL || g_pI2s == NULL || g_pDmac == NULL || g_pGpio == NULL)
     {
         g_st.initRc = 1;
         RETAILMSG(1, (L"ipodwav: cannot map the registers\r\n"));
         return FALSE;
     }
 
-    // the I2S block must have its clock for its registers to be read
+    // I2S 0: its clock (written only when gated: see IpodPcm_Start), then
+    // Apple's and Rockbox's order: interface clock, transmitter, divider
     if (RCLK(CLK_PWRCON1) & PWRCON1_I2S0)
         RCLK(CLK_PWRCON1) &= ~PWRCON1_I2S0;
+    g_st.clkDiv = RI2S(I2S_CLKDIV);     // as found, for the log
+    RI2S(I2S_CLKCON) = 1;
+    RI2S(I2S_TXCON) = I2STXCON_24IN32;
+    RI2S(I2S_CLKDIV) = I2S_DIV;
+    div = I2S_DIV;
 
-    // the rate Rockbox left the codec at; anything outside 8 .. 120 kHz is not believed
-    div = RI2S(I2S_CLKDIV);
-    g_st.clkDiv = div;
-    if (div < 100 || div > 1500)
+    if (!CodecSetup())
     {
-        g_st.initRc = 2;
-        RETAILMSG(1, (L"ipodwav: I2SCLKDIV is %u, no sample rate follows from that\r\n", div));
+        g_st.initRc = 4;
+        RETAILMSG(1, (L"ipodwav: codec set-up failed: step %u, register 0x%02x, error %u (I2SCLKDIV was %u)\r\n",
+                      g_st.codecStep, g_st.codecReg, g_st.codecError, g_st.clkDiv));
+        g_st.clkDiv = div;
         return FALSE;
     }
+    RETAILMSG(1, (L"ipodwav: codec set up: version 0x%02x, %u registers, headphones 0x%02x (%d dB), I2SCLKDIV was %u\r\n",
+                  g_st.codecVersion, g_st.codecWrites, g_st.hpReg, IPODPCM_HP_DB, g_st.clkDiv));
+    g_st.clkDiv = div;
 
     // one block of real memory that is not cached, for the DMA controller
     g_pBlock = (BYTE *)AllocPhysMem(DMA_BLOCK_BYTES, PAGE_READWRITE | PAGE_NOCACHE, 0, 0, &g_bufPhys);
@@ -224,7 +390,7 @@ BOOL IpodPcm_Start(void)
         return TRUE;
 
     // clocks for the DMA controller and the I2S block (0 = running). Written
-    // only when a gate is closed: the battery driver switches another bit of
+    // only when a gate is closed: the I2C driver switches another bit of
     // PWRCON1 on and off, and two drivers rewriting one register can undo
     // each other's change.
     if (RCLK(CLK_PWRCON0) & PWRCON0_DMAC0)

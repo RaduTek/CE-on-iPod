@@ -31,12 +31,13 @@ ENDIF BSP_NODISPLAY !
 
 ; The sound driver ipodwav.dll (src\drivers\wavedev). The IClass lines are
 ; those of Microsoft's own entry for its sample driver (common.reg): they
-; are how Windows' wave API finds a sound device.
+; are how Windows' wave API finds a sound device. "Order" 2: after I2C1:
+; (Order 0), through which it sets up the codec at start-up.
 [HKEY_LOCAL_MACHINE\Drivers\BuiltIn\IpodWav]
    "Prefix"="WAV"
    "Dll"="ipodwav.dll"
    "Index"=dword:1
-   "Order"=dword:0
+   "Order"=dword:2
    "IClass"=multi_sz:"{E92BC203-8354-4043-A06F-2A170BF6F227}",
                      "{37168569-61C4-45fd-BD54-9442C7DBA46F}"
 
@@ -94,7 +95,7 @@ ENDIF BSP_NODISPLAY !
 ; I2C bus 0 (src\drivers\ipodi2c): stream driver I2C1: with Microsoft's I2C
 ; interface (i2c.h). The power chip and the codec share this bus; every
 ; driver that talks to them goes through I2C1:. "Order" 0 loads it before
-; its users (battery driver: Order 1).
+; its users (battery driver: Order 1, sound driver: Order 2).
 [HKEY_LOCAL_MACHINE\Drivers\BuiltIn\I2C0]
     "Prefix"="I2C"
     "Dll"="ipodi2c.dll"

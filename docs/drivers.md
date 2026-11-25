@@ -23,12 +23,19 @@ the click wheel in particular will need their own set-up there (see each
   controller plays on by itself; the driver's thread looks at the DMA
   position every few milliseconds and refills the page just left. No
   interrupt is used.
-- **Expects:** the codec powered, unmuted and clock master, the I2S clocks
-  running. The sample rate is read back from `I2SCLKDIV` (12 MHz / rate),
-  i.e. whatever Rockbox last played at. Windows' streams are converted to
-  that rate by the sample's mixer.
-- **Does not:** set up the codec, change the rate, touch the codec's
-  volume (Windows' volume is applied to the samples), detect headphones.
+- **Sets up the path itself at start-up**, the same after a Rockbox (ROLO)
+  start and a cold start (where the bootloader leaves the codec in reset),
+  in Rockbox's order: I2S 0 clock and transmitter, `I2SCLKDIV` 272
+  (44118 Hz), the codec's master clock (`CLKCON3`), its reset (port 3 pin
+  3) low 10 ms, then through `I2C1:` the codec's version register and
+  Rockbox's `audiohw_preinit`/`postinit` register sequence. Headphones at a
+  fixed -20 dB (`IPODPCM_HP_DB`), unmuted; Windows' volume scales the
+  samples below that. Loads after `I2C1:` (`Order` 2).
+- **Expects:** the I2S pins set up (Rockbox's GPIO table, which the
+  bootloader applies too) and the codec's supply on (Rockbox does not know
+  which power chip output feeds it either).
+- **Does not:** change the rate, follow Windows' volume on the codec,
+  detect headphones, record.
 - **Check:** "Sound check" on the desktop (the rate found, pages played
   and late ones, DMA errors and stalls; a test tone and the start-up
   sound).

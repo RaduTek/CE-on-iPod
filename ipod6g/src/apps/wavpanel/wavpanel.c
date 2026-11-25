@@ -225,6 +225,9 @@ static void Paint(HDC hdc)
     Line(hdc, &y, sz);
     wsprintf(sz, L"gates %08X %08X  clkcon3 %08X", g_st.pwrcon0, g_st.pwrcon1, g_st.clkcon3);
     Line(hdc, &y, sz);
+    wsprintf(sz, L"codec: version %02X  %u writes  headphones %02X  step %u reg %02X error %u",
+             g_st.codecVersion, g_st.codecWrites, g_st.hpReg, g_st.codecStep, g_st.codecReg, g_st.codecError);
+    Line(hdc, &y, sz);
 
     SelectObject(hdc, hOld);
 }

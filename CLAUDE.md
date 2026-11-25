@@ -120,6 +120,12 @@ display, HDD, PMU/backlight, clickwheel, audio.
   cold start gives `ipodwav: I2SCLKDIV is 0` and the driver does not load (the bootloader never
   sets up the codec/I2S). `DEVICE!InitDeviceContent ... 'Notify', error code 2404` appears in
   both (Microsoft's notify driver, not ours).
+- 2026-11-26: **Sound works from a cold start.** ipodpcm.c now sets up I2S, the codec clock and
+  reset, and Rockbox's CS42L55 register sequence through I2C1: on every start. Log on both
+  starts: `ipodwav: codec set up: version 0xe9, 33 registers, headphones 0x6c (-20 dB),
+  I2SCLKDIV was 272` (ROLO) / `was 0` (cold), then `ready, I2SCLKDIV 272 = 44118 Hz`. The codec
+  answers after reset on a cold start, so its supply is on without any power-chip change.
+  Load order I2C1: (0) -> battery (1) -> sound (2) confirmed in the log.
 
 ## Display driver (src/drivers/ipodlcd) - test pattern verified on hardware 2026-11-19
 - `ipodlcd.dll`, GPE flat driver (structure from CEonPi raspiBasic_ddi), loaded by GWES (SHMK).
