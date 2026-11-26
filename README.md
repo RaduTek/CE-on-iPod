@@ -6,7 +6,7 @@ A Board Support Package (BSP) for running Windows Embedded Compact 7 (CE 7) on t
 
 <img src="docs/images/booted.png" height=300 />
 
-[Boot demo video (YouTube)](https://youtu.be/UabXwbNv9Gw)
+[Updated Demo Video (YouTube)](https://youtu.be/_ghpg-20lIw)
 
 ## Layout
 
@@ -44,12 +44,15 @@ These are hardware features that are functional
 
 | Feature | Comments |
 |-|-|
-| ATA HDD | CE-ATA models |
+| USB Host | Attach USB input devices to control the OS (port the DWC2 host driver from CEonPi) |
+| TV Out | Output a higher resolution desktop via the TV encoder (preferably component for progressive video) |
 | USB Function | Let the iPod be connected as a USB device to a computer (for Mass Storage) |
 
 ## Notes
 
 ### Bootloader
+
+Update: A custom bootloader isn't needed, the `wince.ipod` binary can be launched from within Rockbox's own file explorer.
 
 By default, the Rockbox bootloader can only load boot images up to 8 MB in size. A basic CE kernel image will just about fit, but if you want any sort of graphics the kernel image will exceed the maximum size and the original bootloader won't load it anymore.
 
