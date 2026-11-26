@@ -34,16 +34,18 @@ ENDIF BSP_NODISPLAY !
 ; are how Windows' wave API finds a sound device. "Order" 2: after I2C1:
 ; (Order 0), through which it sets up the codec at start-up.
 ; "SysIntr" 0x11 = SYSINTR_AUDIO (bsp_cfg.h: DMA controller 0, IRQ 16).
+; "Priority256" 0x6E = 110: the wave MDD's interrupt thread, which refills
+; the DMA ring every 5.8 ms (the MDD's own default is 210; CEonPi needed 110).
 ; "TestTone" 1: at start-up, 0.5 s 440 Hz LEFT then 0.5 s 880 Hz RIGHT
-; through the DMA ring, with a log line on its interrupts
-; (docs/audio-mdd-plan.md step 1); 0 = off.
+; through the DMA ring, with a log line on its interrupts; 0 = off.
 [HKEY_LOCAL_MACHINE\Drivers\BuiltIn\IpodWav]
    "Prefix"="WAV"
    "Dll"="ipodwav.dll"
    "Index"=dword:1
    "Order"=dword:2
    "SysIntr"=dword:11
-   "TestTone"=dword:1
+   "Priority256"=dword:6E
+   "TestTone"=dword:0
    "IClass"=multi_sz:"{E92BC203-8354-4043-A06F-2A170BF6F227}",
                      "{37168569-61C4-45fd-BD54-9442C7DBA46F}"
 

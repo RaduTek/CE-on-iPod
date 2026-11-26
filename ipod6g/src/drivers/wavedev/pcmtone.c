@@ -4,7 +4,8 @@
 //
 // With TestTone = 1 in the driver's registry key: 0.5 s of 440 Hz on the
 // LEFT channel, then 0.5 s of 880 Hz on the RIGHT, written into the ring as
-// it plays, one wait for SYSINTR_AUDIO per block. The log line at the end
+// it plays, one wait for SYSINTR_AUDIO per block. Runs in
+// PDD_AudioInitialize, before the MDD takes the interrupt for its IST. The log line at the end
 // says how many interrupts came in how long; at 44118 Hz one block of 256
 // frames lasts 5.8 ms, so 1 s of tone is about 172 interrupts and none
 // late.
@@ -17,15 +18,10 @@
 #include <pkfuncs.h>
 #include <math.h>
 
-#include <bsp_cfg.h>
 #include <ipodpcm.h>
 #include "pcmring.h"
 
-#define REG_KEY             L"Drivers\\BuiltIn\\IpodWav"
 #define REG_TEST_TONE       L"TestTone"
-#define REG_SYSINTR         L"SysIntr"
-#define REG_PRIORITY        L"Priority256"
-#define DEFAULT_PRIORITY    110         // as CEonPi's sound IST
 
 #define TONE_TABLE_BITS     10
 #define TONE_TABLE          (1 << TONE_TABLE_BITS)
@@ -126,9 +122,9 @@ static void ToneRun(DWORD sysIntr, DWORD priority)
         RETAILMSG(1, (L"ipodwav: test tone: the ring did not start\r\n"));
         goto Done;
     }
+    // no register dump here: ~400 characters of RETAILMSG over the serial
+    // port hold this thread for ~35 ms (step 1 measured that as a gap)
     start = last = GetTickCount();
-    Sleep(3);
-    PcmRing_Dump(L"tone");
 
     // keep writing until all of the tone has been played
     while ((int)(PcmRing_ReadPos() - g_tone.rightEnd) < 0)
@@ -171,23 +167,8 @@ Done:
     CloseHandle(hEvent);
 }
 
-void PcmTone_Check(HKEY hKey)
+void PcmTone_Check(HKEY hKey, DWORD sysIntr, DWORD priority)
 {
-    HKEY hOwn = NULL;
-    DWORD tone, sysIntr, priority;
-
-    if (hKey == NULL)
-    {
-        if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, REG_KEY, 0, 0, &hOwn) != ERROR_SUCCESS)
-            hOwn = NULL;
-        hKey = hOwn;
-    }
-    tone = RegDword(hKey, REG_TEST_TONE, 0);
-    sysIntr = RegDword(hKey, REG_SYSINTR, SYSINTR_AUDIO);
-    priority = RegDword(hKey, REG_PRIORITY, DEFAULT_PRIORITY);
-    if (hOwn != NULL)
-        RegCloseKey(hOwn);
-
-    if (tone)
+    if (RegDword(hKey, REG_TEST_TONE, 0))
         ToneRun(sysIntr, priority);
 }

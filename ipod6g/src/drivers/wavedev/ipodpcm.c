@@ -1,5 +1,6 @@
 //
-// ipodpcm.c - the iPod's audio path under the Windows CE sound driver
+// ipodpcm.c - the iPod's audio path: the hardware layer of the Windows CE
+// sound driver (pcmring.h), under the PDD (wavepdd.cpp)
 //
 // The path is the one Rockbox plays music through (first tried under
 // Windows CE with a plain tone): DMA controller 0, channel 2 -> I2S 0
@@ -21,18 +22,8 @@
 // Not done: the codec's supply (Rockbox does not know which power chip
 // output it is either; it is assumed on), headphone detection, recording.
 //
-// Two pages of sound, each one DMA list item, linked to each other: the DMA
-// controller plays page 0, 1, 0, 1 ... by itself, without an interrupt. The
-// driver's thread looks at the DMA position every few milliseconds and
-// refills the page the controller has just left.
-//
-// Being added (docs/audio-mdd-plan.md, step 1): the DMA ring of pcmring.h,
-// on the same channel, with an interrupt per block. For now only its test
-// tone (pcmtone.c, registry TestTone) uses it, once at start-up, before the
-// two-page engine ever runs; step 2 drops the two pages.
-//
-// All functions are called with the driver's lock held, except
-// IpodPcm_Init (start-up) and IpodPcm_StatusIoctl (reads only).
+// Playback is a DMA ring with an interrupt per block (pcmring.h; verified
+// with the test tone: 168 interrupts in 1004 ms for 1 s of sound).
 //
 #include <windows.h>
 #include <winioctl.h>
@@ -97,18 +88,11 @@
 #define DMAC_PERI_I2S0_TX   0x0A
 
 // one list item: 32-bit words, the source moves, the destination is fixed,
-// bursts of 8 in and 4 out, no interrupt
+// bursts of 8 in and 4 out (the ring adds the interrupt bit, CH_CONTROL_I)
 #define CH_CONTROL_VALUE(words) ((words) | (2 << 12) | (1 << 15) | (2 << 18) | (2 << 21) \
                                  | (1 << 26) | (7 << 28))
-// memory to peripheral, the DMA controller counts; both interrupts masked
+// memory to peripheral, the DMA controller counts (the ring adds CHCONFIG_IE/ITC)
 #define CH_CONFIG_VALUE     ((DMAC_PERI_I2S0_TX << 6) | (1 << 11))
-
-// the DMA memory: page 0, page 1, the two list items
-#define PAGE1_OFFSET        0x4000
-#define LLI_OFFSET          0x8000
-#define DMA_BLOCK_BYTES     0x9000
-#define IDLE_WAIT_LOOPS     200000
-#define STALL_MS            500
 
 // CS42L55 registers (Rockbox firmware/export/cs42l55.h)
 #define CS_CHIPVERSION      0x01
@@ -161,17 +145,16 @@ static const CS_WRITE g_csPostinit[] = {
     { 0x0F, 0x80 },     // PLAYCTL: master A and B unmuted, DSP still off
 };
 
+
+#define IDLE_WAIT_LOOPS     200000
+
 static volatile UINT32 *g_pClk = NULL, *g_pI2s = NULL, *g_pDmac = NULL, *g_pGpio = NULL;
 #define RCLK(off)           g_pClk[(off) >> 2]
 #define RI2S(off)           g_pI2s[(off) >> 2]
 #define RDMA(off)           g_pDmac[(off) >> 2]
 #define RGPIO(off)          g_pGpio[(off) >> 2]
 
-static BYTE    *g_pBlock = NULL;        // the DMA memory (not cached)
-static ULONG    g_bufPhys = 0;
 static IPODPCM_STATUS g_st;
-static DWORD    g_lastPoll, g_lastMove, g_lastSrc;
-static BOOL     g_stalled;
 
 static void *MapReg(DWORD pa)
 {
@@ -196,14 +179,6 @@ static void ChannelOff(void)
         g_st.stuckWaits++;
     RDMA(DMAC_INTTCCLR) = 1 << DMAC_CH;
     RDMA(DMAC_INTERRCLR) = 1 << DMAC_CH;
-}
-
-// The page the DMA controller reads from, by its source address. An address
-// just past the end of a page still counts as that page: the controller is
-// about to load the next list item.
-static DWORD PlayingPage(DWORD src)
-{
-    return ((src - g_bufPhys) >= PAGE1_OFFSET) ? 1 : 0;
 }
 
 // One codec register (the I2C handle is set to the codec). FALSE = failed,
@@ -288,263 +263,6 @@ static BOOL CodecSetup(void)
     return ok;
 }
 
-BOOL IpodPcm_Init(void)
-{
-    DWORD div;
-
-    memset(&g_st, 0, sizeof(g_st));
-    g_st.version = IPODPCM_VERSION;
-    g_st.rate = IPODPCM_FALLBACK_RATE;
-    g_st.pageFrames = IPODPCM_FALLBACK_FRAMES;
-
-    g_pClk = (volatile UINT32 *)MapReg(PA_CLK);
-    g_pI2s = (volatile UINT32 *)MapReg(PA_I2S);
-    g_pDmac = (volatile UINT32 *)MapReg(PA_DMAC0);
-    g_pGpio = (volatile UINT32 *)MapReg(PA_GPIO);
-    if (g_pClk == NULL || g_pI2s == NULL || g_pDmac == NULL || g_pGpio == NULL)
-    {
-        g_st.initRc = 1;
-        RETAILMSG(1, (L"ipodwav: cannot map the registers\r\n"));
-        return FALSE;
-    }
-
-    // I2S 0: its clock (written only when gated: see IpodPcm_Start), then
-    // Apple's and Rockbox's order: interface clock, transmitter, divider
-    if (RCLK(CLK_PWRCON1) & PWRCON1_I2S0)
-        RCLK(CLK_PWRCON1) &= ~PWRCON1_I2S0;
-    g_st.clkDiv = RI2S(I2S_CLKDIV);     // as found, for the log
-    RI2S(I2S_CLKCON) = 1;
-    RI2S(I2S_TXCON) = I2STXCON_24IN32;
-    RI2S(I2S_CLKDIV) = I2S_DIV;
-    div = I2S_DIV;
-
-    if (!CodecSetup())
-    {
-        g_st.initRc = 4;
-        RETAILMSG(1, (L"ipodwav: codec set-up failed: step %u, register 0x%02x, error %u (I2SCLKDIV was %u)\r\n",
-                      g_st.codecStep, g_st.codecReg, g_st.codecError, g_st.clkDiv));
-        g_st.clkDiv = div;
-        return FALSE;
-    }
-    RETAILMSG(1, (L"ipodwav: codec set up: version 0x%02x, %u registers, headphones 0x%02x (%d dB), I2SCLKDIV was %u\r\n",
-                  g_st.codecVersion, g_st.codecWrites, g_st.hpReg, IPODPCM_HP_DB, g_st.clkDiv));
-    g_st.clkDiv = div;
-
-    // one block of real memory that is not cached, for the DMA controller
-    g_pBlock = (BYTE *)AllocPhysMem(DMA_BLOCK_BYTES, PAGE_READWRITE | PAGE_NOCACHE, 0, 0, &g_bufPhys);
-    if (g_pBlock == NULL)
-    {
-        g_st.initRc = 3;
-        RETAILMSG(1, (L"ipodwav: no memory for the DMA pages\r\n"));
-        return FALSE;
-    }
-    memset(g_pBlock, 0, DMA_BLOCK_BYTES);
-    g_st.bufPhys = g_bufPhys;
-
-    g_st.rate = (I2S_MCLK_HZ + div / 2) / div;
-    g_st.pageFrames = g_st.rate / 50;
-    if (g_st.pageFrames > IPODPCM_MAX_PAGE_FRAMES)
-        g_st.pageFrames = IPODPCM_MAX_PAGE_FRAMES;
-    g_st.ready = 1;
-    RETAILMSG(1, (L"ipodwav: ready, I2SCLKDIV %u = %u Hz, pages of %u frames at physical 0x%08x\r\n",
-                  div, g_st.rate, g_st.pageFrames, g_bufPhys));
-
-    // docs/audio-mdd-plan.md step 1: the ring and, with TestTone = 1, its
-    // test tone. Neither affects the two-page engine.
-    if (PcmRing_Init())
-        PcmTone_Check(NULL);
-    return TRUE;
-}
-
-DWORD IpodPcm_Rate(void)
-{
-    return g_st.rate ? g_st.rate : IPODPCM_FALLBACK_RATE;
-}
-
-DWORD IpodPcm_PageFrames(void)
-{
-    return g_st.pageFrames ? g_st.pageFrames : IPODPCM_FALLBACK_FRAMES;
-}
-
-void IpodPcm_WritePage(DWORD page, const short *pStereo)
-{
-    INT32 *pOut;
-    DWORD i, n, peak;
-    int v, a;
-
-    if (!g_st.ready || page > 1 || pStereo == NULL)
-        return;
-
-    pOut = (INT32 *)(g_pBlock + (page ? PAGE1_OFFSET : 0));
-    n = g_st.pageFrames * 2;
-    peak = g_st.peak;
-    for (i = 0; i < n; i++)
-    {
-        v = pStereo[i];
-        a = (v < 0) ? -v : v;
-        if ((DWORD)a > peak)
-            peak = (DWORD)a;
-        pOut[i] = (INT32)v * (1 << IPODPCM_HEADROOM_SHIFT);
-    }
-    g_st.peak = peak;
-    g_st.fills++;
-
-    // too late: the controller is already playing what was in this page
-    if (g_st.running && PlayingPage(RDMA(CH_SRCADDR)) == page)
-        g_st.lateFills++;
-}
-
-// The clocks, the DMA controller and the I2S transmitter, ready for the
-// channel to be started (by the two-page engine or the ring).
-static void PathOn(void)
-{
-    // clocks for the DMA controller and the I2S block (0 = running). Written
-    // only when a gate is closed: the I2C driver switches another bit of
-    // PWRCON1 on and off, and two drivers rewriting one register can undo
-    // each other's change.
-    if (RCLK(CLK_PWRCON0) & PWRCON0_DMAC0)
-        RCLK(CLK_PWRCON0) &= ~PWRCON0_DMAC0;
-    if (RCLK(CLK_PWRCON1) & PWRCON1_I2S0)
-        RCLK(CLK_PWRCON1) &= ~PWRCON1_I2S0;
-
-    ChannelOff();
-    RDMA(DMAC_CONFIG) |= 1;             // controller on (Rockbox turns it off when idle)
-
-    // the I2S transmitter, 24 bits in 32, started before the DMA channel
-    RI2S(I2S_TXCON) = I2STXCON_24IN32;
-    RI2S(I2S_CLKCON) = 1;
-    RI2S(I2S_TXCOM) = I2STXCOM_STOP;
-    RI2S(I2S_TXCOM) = I2STXCOM_RUN;
-}
-
-BOOL IpodPcm_Start(void)
-{
-    UINT32 *pLli;
-    DWORD words;
-
-    if (!g_st.ready || PcmRing_Running())
-    {
-        g_st.lastStartRc = 1;
-        return FALSE;
-    }
-    if (g_st.running)
-        return TRUE;
-
-    PathOn();
-
-    // two list items, one page each, linking to each other
-    words = g_st.pageFrames * 2;
-    pLli = (UINT32 *)(g_pBlock + LLI_OFFSET);
-    pLli[0] = g_bufPhys;
-    pLli[1] = PA_I2S + I2S_TXDB0;
-    pLli[2] = g_bufPhys + LLI_OFFSET + 16;
-    pLli[3] = CH_CONTROL_VALUE(words);
-    pLli[4] = g_bufPhys + PAGE1_OFFSET;
-    pLli[5] = PA_I2S + I2S_TXDB0;
-    pLli[6] = g_bufPhys + LLI_OFFSET;
-    pLli[7] = CH_CONTROL_VALUE(words);
-
-    // the channel starts with the first item
-    RDMA(CH_SRCADDR) = pLli[0];
-    RDMA(CH_DESTADDR) = pLli[1];
-    RDMA(CH_LINK) = pLli[2];
-    RDMA(CH_CONTROL) = pLli[3];
-    RDMA(CH_CONFIG) = CH_CONFIG_VALUE;
-    RDMA(CH_CONFIG) = CH_CONFIG_VALUE | CHCONFIG_E;
-
-    g_lastPoll = g_lastMove = GetTickCount();
-    g_lastSrc = g_bufPhys;
-    g_stalled = FALSE;
-    g_st.lastStartRc = 0;
-    g_st.starts++;
-    g_st.running = 1;
-    return TRUE;
-}
-
-void IpodPcm_Stop(void)
-{
-    if (!g_st.running)
-        return;
-    ChannelOff();
-    RI2S(I2S_TXCOM) = I2STXCOM_STOP;
-    g_st.running = 0;
-    g_st.stops++;
-    g_st.lastPeak = g_st.peak;
-    g_st.peak = 0;
-}
-
-BOOL IpodPcm_PageFinished(DWORD page)
-{
-    DWORD now, gap, src;
-
-    if (!g_st.running)
-        return FALSE;
-
-    now = GetTickCount();
-    gap = now - g_lastPoll;
-    g_lastPoll = now;
-    if (gap > g_st.maxGapMs)
-        g_st.maxGapMs = gap;
-
-    if (RDMA(DMAC_RAWINTERR) & (1 << DMAC_CH))
-    {
-        g_st.dmaErrors++;
-        RDMA(DMAC_INTERRCLR) = 1 << DMAC_CH;
-    }
-
-    src = RDMA(CH_SRCADDR);
-    if (src != g_lastSrc)
-    {
-        g_lastSrc = src;
-        g_lastMove = now;
-        g_stalled = FALSE;
-    }
-    else if (!g_stalled && now - g_lastMove >= STALL_MS)
-    {
-        g_st.stalls++;
-        g_stalled = TRUE;
-    }
-
-    return PlayingPage(src) != page;
-}
-
-BOOL IpodPcm_StatusIoctl(PBYTE pBufOut, DWORD dwLenOut, PDWORD pdwActualOut)
-{
-    IPODPCM_STATUS st;
-    BOOL rc = FALSE;
-
-    if (pBufOut == NULL || dwLenOut < sizeof(IPODPCM_STATUS))
-    {
-        SetLastError(ERROR_INVALID_PARAMETER);
-        return FALSE;
-    }
-    if (g_pClk != NULL && g_pI2s != NULL && g_pDmac != NULL)
-    {
-        g_st.pwrcon0 = RCLK(CLK_PWRCON0);
-        g_st.pwrcon1 = RCLK(CLK_PWRCON1);
-        g_st.clkcon3 = RCLK(CLK_CLKCON3);
-        g_st.i2sTxCon = RI2S(I2S_TXCON);
-        g_st.i2sTxCom = RI2S(I2S_TXCOM);
-        g_st.i2sStatus = RI2S(I2S_STATUS);
-        g_st.dmacConfig = RDMA(DMAC_CONFIG);
-        g_st.position = RDMA(CH_SRCADDR);
-        g_st.chConfig = RDMA(CH_CONFIG);
-        g_st.chControl = RDMA(CH_CONTROL);
-    }
-    st = g_st;
-    __try
-    {
-        memcpy(pBufOut, &st, sizeof(st));
-        if (pdwActualOut != NULL)
-            *pdwActualOut = sizeof(st);
-        rc = TRUE;
-    }
-    __except (EXCEPTION_EXECUTE_HANDLER)
-    {
-        rc = FALSE;
-    }
-    return rc;
-}
 
 // ---------------------------------------------------------------------------
 // The DMA ring (pcmring.h)
@@ -586,28 +304,83 @@ static struct {
 
 static volatile UINT32 *g_pVic0 = NULL;
 
-BOOL PcmRing_Init(void)
+// All 8 channels of DMA controller 0 share one interrupt line (IRQ 16), and
+// no other driver of this BSP uses the controller. Rockbox (also its
+// bootloader, so on a cold start too) leaves its LCD DMA channel (4) with a
+// finished transfer pending and its interrupt enabled: that holds the line
+// up, and once the MDD enables IRQ 16 its thread is woken endlessly at
+// priority 110 and the boot stops. So: every other channel's interrupts
+// off, and the pending status of every idle channel cleared. Needs the
+// controller's clock (written only when gated, as in PathOn). Returns the
+// idle channels that had something pending.
+static UINT32 DmacQuiet(void)
+{
+    UINT32 ch, idle, stale;
+
+    if (RCLK(CLK_PWRCON0) & PWRCON0_DMAC0)
+        RCLK(CLK_PWRCON0) &= ~PWRCON0_DMAC0;
+
+    for (ch = 0; ch < 8; ch++)
+    {
+        if (ch != DMAC_CH)
+            RDMA(0x100 + (ch << 5) + 0x10) &= ~(CHCONFIG_IE | CHCONFIG_ITC);
+    }
+    idle = ~RDMA(DMAC_ENBLDCHNS) & 0xFF;
+    if (g_ring.running)
+        idle &= ~(1u << DMAC_CH);
+    stale = (RDMA(DMAC_RAWINTTC) | RDMA(DMAC_RAWINTERR)) & idle;
+    if (stale != 0)
+    {
+        RDMA(DMAC_INTTCCLR) = stale;
+        RDMA(DMAC_INTERRCLR) = stale;
+    }
+    return stale;
+}
+
+UINT32 PcmRing_Quiet(void)
+{
+    if (g_pDmac == NULL || g_pClk == NULL)
+        return 0;
+    return DmacQuiet();
+}
+
+// The clocks, the DMA controller and the I2S transmitter, ready for the
+// channel to be started.
+static void PathOn(void)
+{
+    // clocks for the DMA controller and the I2S block (0 = running). Written
+    // only when a gate is closed: the I2C driver switches another bit of
+    // PWRCON1 on and off, and two drivers rewriting one register can undo
+    // each other's change.
+    if (RCLK(CLK_PWRCON0) & PWRCON0_DMAC0)
+        RCLK(CLK_PWRCON0) &= ~PWRCON0_DMAC0;
+    if (RCLK(CLK_PWRCON1) & PWRCON1_I2S0)
+        RCLK(CLK_PWRCON1) &= ~PWRCON1_I2S0;
+
+    ChannelOff();
+    RDMA(DMAC_CONFIG) |= 1;             // controller on (Rockbox turns it off when idle)
+
+    // the I2S transmitter, 24 bits in 32, started before the DMA channel
+    RI2S(I2S_TXCON) = I2STXCON_24IN32;
+    RI2S(I2S_CLKCON) = 1;
+    RI2S(I2S_TXCOM) = I2STXCOM_STOP;
+    RI2S(I2S_TXCOM) = I2STXCOM_RUN;
+}
+
+// The ring's memory and its list items: item i plays block i, interrupts
+// when done and links to item i + 1; the last links back to the first.
+static BOOL RingSetup(void)
 {
     UINT32 *pLli;
     DWORD i;
 
-    if (g_ring.pMem != NULL)
-        return TRUE;
-    if (!g_st.ready)
-        return FALSE;
-
     g_ring.pMem = (BYTE *)AllocPhysMem(RING_MEM_BYTES, PAGE_READWRITE | PAGE_NOCACHE, 0, 0,
                                        &g_ring.memPhys);
     if (g_ring.pMem == NULL)
-    {
-        RETAILMSG(1, (L"ipodwav: no memory for the DMA ring (%u bytes)\r\n", RING_MEM_BYTES));
         return FALSE;
-    }
     g_ring.pRing = (INT32 *)(g_ring.pMem + RING_OFFSET);
     g_ring.ringPhys = g_ring.memPhys + RING_OFFSET;
 
-    // list item i plays block i, interrupts when done, links to item i + 1;
-    // the last links back to the first
     pLli = (UINT32 *)g_ring.pMem;
     for (i = 0; i < PCMRING_BLOCKS; i++)
     {
@@ -616,11 +389,121 @@ BOOL PcmRing_Init(void)
         pLli[4 * i + 2] = g_ring.memPhys + ((i + 1) % PCMRING_BLOCKS) * RING_LLI_BYTES;
         pLli[4 * i + 3] = CH_CONTROL_VALUE(RING_BLOCK_WORDS) | CH_CONTROL_I;
     }
-    PcmRing_Reset();
-
-    RETAILMSG(1, (L"ipodwav: DMA ring: %u blocks of %u frames at physical 0x%08x, list items at 0x%08x\r\n",
-                  PCMRING_BLOCKS, PCMRING_BLOCK_FRAMES, g_ring.ringPhys, g_ring.memPhys));
+    memset(g_ring.pRing, 0, RING_BYTES);
     return TRUE;
+}
+
+BOOL IpodPcm_Init(void)
+{
+    DWORD div;
+    UINT32 stale;
+
+    memset(&g_st, 0, sizeof(g_st));
+    g_st.version = IPODPCM_VERSION;
+    g_st.rate = IPODPCM_RATE;
+    g_st.blocks = PCMRING_BLOCKS;
+    g_st.blockFrames = PCMRING_BLOCK_FRAMES;
+
+    g_pClk = (volatile UINT32 *)MapReg(PA_CLK);
+    g_pI2s = (volatile UINT32 *)MapReg(PA_I2S);
+    g_pDmac = (volatile UINT32 *)MapReg(PA_DMAC0);
+    g_pGpio = (volatile UINT32 *)MapReg(PA_GPIO);
+    if (g_pClk == NULL || g_pI2s == NULL || g_pDmac == NULL || g_pGpio == NULL)
+    {
+        g_st.initRc = 1;
+        RETAILMSG(1, (L"ipodwav: cannot map the registers\r\n"));
+        return FALSE;
+    }
+
+    // I2S 0: its clock (written only when gated: see PathOn), then Apple's
+    // and Rockbox's order: interface clock, transmitter, divider
+    if (RCLK(CLK_PWRCON1) & PWRCON1_I2S0)
+        RCLK(CLK_PWRCON1) &= ~PWRCON1_I2S0;
+    g_st.clkDiv = RI2S(I2S_CLKDIV);     // as found, for the log
+    RI2S(I2S_CLKCON) = 1;
+    RI2S(I2S_TXCON) = I2STXCON_24IN32;
+    RI2S(I2S_CLKDIV) = I2S_DIV;
+    div = I2S_DIV;
+
+    if (!CodecSetup())
+    {
+        g_st.initRc = 4;
+        RETAILMSG(1, (L"ipodwav: codec set-up failed: step %u, register 0x%02x, error %u (I2SCLKDIV was %u)\r\n",
+                      g_st.codecStep, g_st.codecReg, g_st.codecError, g_st.clkDiv));
+        g_st.clkDiv = div;
+        return FALSE;
+    }
+    RETAILMSG(1, (L"ipodwav: codec set up: version 0x%02x, %u registers, headphones 0x%02x (%d dB), I2SCLKDIV was %u\r\n",
+                  g_st.codecVersion, g_st.codecWrites, g_st.hpReg, IPODPCM_HP_DB, g_st.clkDiv));
+    g_st.clkDiv = div;
+
+    if (!RingSetup())
+    {
+        g_st.initRc = 5;
+        RETAILMSG(1, (L"ipodwav: no memory for the DMA ring (%u bytes)\r\n", RING_MEM_BYTES));
+        return FALSE;
+    }
+    g_st.bufPhys = g_ring.ringPhys;
+
+    // before anyone enables IRQ 16 (the MDD, right after PDD_AudioInitialize)
+    stale = DmacQuiet();                // also the controller's clock on
+    ChannelOff();                       // our channel too (Rockbox plays through it)
+
+    g_st.rate = (I2S_MCLK_HZ + div / 2) / div;
+    g_st.ready = 1;
+    RETAILMSG(1, (L"ipodwav: ready, I2SCLKDIV %u = %u Hz, DMA ring of %u x %u frames at physical 0x%08x; DMA controller 0 quieted (pending on idle channels: 0x%02x)\r\n",
+                  div, g_st.rate, PCMRING_BLOCKS, PCMRING_BLOCK_FRAMES, g_ring.ringPhys, stale));
+    return TRUE;
+}
+
+DWORD IpodPcm_Rate(void)
+{
+    return g_st.rate ? g_st.rate : IPODPCM_RATE;
+}
+
+IPODPCM_STATUS *IpodPcm_Status(void)
+{
+    return &g_st;
+}
+
+BOOL IpodPcm_StatusIoctl(PBYTE pBufOut, DWORD dwLenOut, PDWORD pdwActualOut)
+{
+    IPODPCM_STATUS st;
+    BOOL rc = FALSE;
+
+    if (pBufOut == NULL || dwLenOut < sizeof(IPODPCM_STATUS))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (g_pClk != NULL && g_pI2s != NULL && g_pDmac != NULL)
+    {
+        g_st.pwrcon0 = RCLK(CLK_PWRCON0);
+        g_st.pwrcon1 = RCLK(CLK_PWRCON1);
+        g_st.clkcon3 = RCLK(CLK_CLKCON3);
+        g_st.i2sTxCon = RI2S(I2S_TXCON);
+        g_st.i2sTxCom = RI2S(I2S_TXCOM);
+        g_st.i2sStatus = RI2S(I2S_STATUS);
+        g_st.dmacConfig = RDMA(DMAC_CONFIG);
+        g_st.position = RDMA(CH_SRCADDR);
+        g_st.chConfig = RDMA(CH_CONFIG);
+        g_st.chControl = RDMA(CH_CONTROL);
+        if (g_ring.pMem != NULL)
+            g_st.readPos = PcmRing_ReadPos();
+    }
+    st = g_st;
+    __try
+    {
+        memcpy(pBufOut, &st, sizeof(st));
+        if (pdwActualOut != NULL)
+            *pdwActualOut = sizeof(st);
+        rc = TRUE;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        rc = FALSE;
+    }
+    return rc;
 }
 
 void PcmRing_Reset(void)
@@ -637,25 +520,18 @@ BOOL PcmRing_Start(void)
     const UINT32 *pLli = (const UINT32 *)g_ring.pMem;
     UINT32 stale;
 
-    if (g_ring.pMem == NULL || g_st.running)
+    if (!g_st.ready)
         return FALSE;
     if (g_ring.running)
         return TRUE;
 
     PathOn();
 
-    // All 8 channels share one interrupt line. A channel that is switched
-    // off but still has an interrupt pending (left by Rockbox, e.g. its LCD
-    // DMA, after a ROLO start) would hold the line up for good: clear it.
-    // No other driver of this BSP uses DMA controller 0.
-    stale = (RDMA(DMAC_RAWINTTC) | RDMA(DMAC_RAWINTERR)) & ~RDMA(DMAC_ENBLDCHNS) & 0xFF;
+    // normally nothing left since IpodPcm_Init (see DmacQuiet)
+    stale = DmacQuiet();
     if (stale != 0)
-    {
-        RDMA(DMAC_INTTCCLR) = stale;
-        RDMA(DMAC_INTERRCLR) = stale;
         RETAILMSG(1, (L"ipodwav: DMA controller 0: cleared old interrupts of idle channels 0x%02x\r\n",
                       stale));
-    }
 
     // block 0, absolute frame 0 (PcmRing_Reset)
     g_ring.playing = 0;
@@ -671,6 +547,7 @@ BOOL PcmRing_Start(void)
     RDMA(CH_CONFIG) = CH_CONFIG_VALUE | CHCONFIG_IE | CHCONFIG_ITC | CHCONFIG_E;
 
     g_ring.running = TRUE;
+    g_st.running = 1;
     g_st.starts++;
     return TRUE;
 }
@@ -683,7 +560,10 @@ void PcmRing_Stop(void)
     ChannelOff();                       // also clears the channel's interrupts
     RI2S(I2S_TXCOM) = I2STXCOM_STOP;
     g_ring.running = FALSE;
+    g_st.running = 0;
     g_st.stops++;
+    g_st.lastPeak = g_st.peak;
+    g_st.peak = 0;
 }
 
 BOOL PcmRing_Running(void)
@@ -709,6 +589,7 @@ int PcmRing_Ack(void)
     if (!g_ring.running)
         return -1;
     g_ring.c.interrupts++;
+    g_st.interrupts++;
 
     if (RDMA(DMAC_INTSTATUS) & ~(1u << DMAC_CH))
         g_ring.c.otherChannels++;
@@ -738,9 +619,15 @@ int PcmRing_Ack(void)
     g_ring.played += done * PCMRING_BLOCK_FRAMES;
 
     if (done >= 2)
+    {
         g_ring.c.late++;
+        g_st.late++;
+    }
     else if (done == 0)
+    {
         g_ring.c.zeroAcks++;
+        g_st.zeroAcks++;
+    }
     return (int)done;
 }
 

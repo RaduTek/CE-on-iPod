@@ -1,30 +1,28 @@
 !if 0
-ipodwav.dll - the iPod's Windows CE sound driver: Microsoft's sample driver
-wavedev2\virtual with the iPod's audio path (ipodpcm.c) as its hardware layer.
+ipodwav.dll - the iPod's Windows CE sound driver: Microsoft's prebuilt wave
+MDD (wavemdd.lib) with our PDD (wavepdd.cpp) over the iPod's audio path and
+DMA ring (ipodpcm.c, pcmring.h) and its test tone (pcmtone.c).
+docs\audio-mdd-plan.md, as CEonPi's pwmaudio.
 !endif
 
 TARGETNAME=ipodwav
 TARGETTYPE=DYNLINK
-DLLENTRY=_DllMainCRTStartup
+
+# wavemdd.lib defines DllEntry; _DllEntryCRTStartup calls it.
+DLLENTRY=_DllEntryCRTStartup
 DEFFILE=ipodwav.def
 
-CDEFINES=$(CDEFINES) -D_WINCEOSVER=$(_WINCEOSVER)
-
-SOURCES= \
-    streamclass.cpp \
-    wavemain.cpp \
-    devctxt.cpp \
-    strmctxt.cpp \
-    input.cpp \
-    output.cpp \
-    mixerdrv.cpp \
-    hwctxt.cpp \
-    dtpnotify.cpp \
-    wavertgctrl.cpp \
-    ipodpcm.c \
-    pcmtone.c \
+# wavemdd.lib must be whole-archive linked (SOURCELIBS) so the WAV_* stream
+# entry points it defines are pulled in for the .def to export. Prebuilt
+# public lib: use the public path, not the common oak root (as CEonPi).
+SOURCELIBS=$(_PUBLICROOT)\common\oak\lib\$(_CPUINDPATH)\wavemdd.lib
 
 TARGETLIBS= \
-    $(_COMMONSDKROOT)\lib\$(_CPUDEPPATH)\ceddk.lib \
     $(_COMMONSDKROOT)\lib\$(_CPUDEPPATH)\coredll.lib \
+    $(_COMMONSDKROOT)\lib\$(_CPUDEPPATH)\ceddk.lib \
+
+SOURCES= \
+    ipodpcm.c \
+    pcmtone.c \
+    wavepdd.cpp \
 

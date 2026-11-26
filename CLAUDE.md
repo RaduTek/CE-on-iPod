@@ -133,6 +133,12 @@ display, HDD, PMU/backlight, clickwheel, audio.
   a stale TC bit on DMAC0 channel 4 (its LCD DMA) after ROLO; ring start clears idle channels'
   status. Synchronous RETAILMSG costs ~3 ms per 40 characters (114 kbaud): keep it out of
   timing-critical paths.
+- 2026-11-26: **Sound on the wave MDD verified** (ROLO and cold): `ipodwav.dll` = `wavemdd.lib` +
+  `wavepdd.cpp` + `ipodpcm.c` (ring) + `pcmtone.c`; `getms.ps1` and the copied Microsoft sample
+  files are gone. Start-up sound, Sound check, Windows volume work, no underruns. Lesson: a
+  shared interrupt line left asserted by Rockbox/bootloader (DMAC0 ch 4, LCD DMA) stormed the
+  MDD's IST and stopped the boot; drivers must quiet shared sources before enabling an IRQ.
+  See docs/drivers.md "Sound".
 
 ## Display driver (src/drivers/ipodlcd) - test pattern verified on hardware 2026-11-19
 - `ipodlcd.dll`, GPE flat driver (structure from CEonPi raspiBasic_ddi), loaded by GWES (SHMK).

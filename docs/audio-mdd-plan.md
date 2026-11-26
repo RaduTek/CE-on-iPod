@@ -1,6 +1,20 @@
 # Plan: port the sound driver to Microsoft's wave MDD + our PDD
 
-Status: **step 1 verified on hardware from ROLO** (2026-11-26; cold start not yet tried). Log:
+Status: **step 2 done and verified** (2026-11-26) from ROLO and from a cold start: `wavepdd.cpp`
+on `wavemdd.lib`, page engine and `getms.ps1` removed, status IOCTL version 3, `Priority256` 110,
+`TestTone` 0. Start-up sound, Sound check and Windows' volume control work; no underruns or DMA
+errors logged. Both starts log `DMA controller 0 quieted (pending on idle channels: 0x10)`, so the
+bootloader leaves channel 4 pending too (cold: `I2SCLKDIV was 0`). Every sound is a new
+`ipodwav: open 44100 Hz 16-bit stereo` (the mixer closes the device when idle; ~100 in a session
+with volume changes). Remaining: step 3 (codec volume), optional.
+First step 2 image **stopped the boot** after `ipodwav: wave MDD + PDD ... ready` (ROLO and cold):
+Rockbox's LCD DMA channel 4 (also in the bootloader) is left with a pending TC and its ITC enable
+on, which holds IRQ 16 high; the MDD's `InterruptInitialize` enabled it, its IST got `IGNORE`, and
+`InterruptDone` let it straight back in: an endless storm at priority 110. (In step 1 the tone's
+ring start happened to clear it.) Fix: `IpodPcm_Init` turns off every other DMAC0 channel's
+interrupt enables and clears idle channels' pending status before the MDD enables IRQ 16; the PDD
+does the same on any interrupt while nothing plays (status `spurious`).
+Step 1 (commit `2bd1511`) **verified on hardware from ROLO** (cold start not yet tried). Log:
 `test tone done: 168 DMA interrupts in 1004 ms (expect ~172 in ~1000 ms), longest gap 36 ms,
 1 late, 0 empty, 0 timeouts, 0 DMA errors, 0 other channels`; tones correct (440 Hz left, 880 Hz
 right), desktop audio still works. The 36 ms gap (and the one late ack, which covered the blocks

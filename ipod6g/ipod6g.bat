@@ -33,10 +33,3 @@ rem KITL builds (it is always on when IMGNOKITL=1). Only for bring-up: the
 rem raw text arrives before Platform Builder syncs the KITL stream.
 rem
 rem set BSP_EARLYUART=1
-
-rem
-rem The sound driver (src\drivers\wavedev) is Microsoft's sample driver with
-rem the iPod's audio path in it; Microsoft's files come from this Platform
-rem Builder, fetched once by getms.ps1 (delete getms.done to fetch again).
-rem
-if not exist %_TARGETPLATROOT%\src\drivers\wavedev\getms.done powershell -NoProfile -ExecutionPolicy Bypass -File %_TARGETPLATROOT%\src\drivers\wavedev\getms.ps1

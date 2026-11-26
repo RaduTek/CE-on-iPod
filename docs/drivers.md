@@ -13,16 +13,28 @@ the click wheel in particular will need their own set-up there (see each
 
 ## Sound: `ipodwav.dll` (`src\drivers\wavedev`)
 
-- Microsoft's `wavedev2\virtual` sample (mixing, volume, the wave API side)
-  with the iPod's audio path in `ipodpcm.c`. The sample's files are not in
-  the repository: `getms.ps1`, run by `ipod6g.bat`, copies them from
-  Platform Builder (`public\common\oak\drivers\wavedev\wavedev2\virtual`)
-  and makes the changes.
+- Microsoft's prebuilt wave MDD (`wavemdd.lib`, linked from the public
+  tree: the `WAV_*` entry points, wave API messages, header queue and the
+  interrupt thread) with our PDD (`wavepdd.cpp`) over the iPod's audio path
+  (`ipodpcm.c`, interface `pcmring.h`). The model is CEonPi's analog audio
+  driver. Windows' software mixer (in `waveapi.dll`) mixes all programs and
+  converts their rates: the driver takes 44100 Hz only, PCM 8/16-bit,
+  mono/stereo, one stream (the mixer's).
 - The path: DMA controller 0, channel 2, into I2S 0, into the CS42L55 codec;
-  24-bit samples in 32-bit words. Two pages linked to each other, so the DMA
-  controller plays on by itself; the driver's thread looks at the DMA
-  position every few milliseconds and refills the page just left. No
-  interrupt is used.
+  24-bit samples in 32-bit words. A DMA ring of 16 blocks x 256 frames
+  (~93 ms) with an interrupt per block (`SYSINTR_AUDIO` = 17, IRQ 16, every
+  ~5.8 ms): the MDD's thread (`Priority256` 110) clears the block just
+  played to silence and copies more audio ahead of the DMA. Buffers go back
+  to the mixer as soon as they are copied.
+- DMA controller 0 has one interrupt line for all 8 channels. Rockbox's LCD
+  DMA (channel 4) is left with a finished transfer pending and its interrupt
+  on, after ROLO and after the bootloader alike (log: `pending on idle
+  channels: 0x10`); that held IRQ 16 up and stopped the boot once. The
+  driver therefore switches every other channel's interrupts off and clears
+  idle channels' pending bits at start-up, before the MDD enables IRQ 16,
+  and again on any interrupt while nothing plays (`spurious` in Sound
+  check). A second user of DMA controller 0 (e.g. LCD DMA) needs the OAL to
+  tell the channels apart, or moves to DMA controller 1.
 - **Sets up the path itself at start-up**, the same after a Rockbox (ROLO)
   start and a cold start (where the bootloader leaves the codec in reset),
   in Rockbox's order: I2S 0 clock and transmitter, `I2SCLKDIV` 272
@@ -36,9 +48,10 @@ the click wheel in particular will need their own set-up there (see each
   which power chip output feeds it either).
 - **Does not:** change the rate, follow Windows' volume on the codec,
   detect headphones, record.
-- **Check:** "Sound check" on the desktop (the rate found, pages played
-  and late ones, DMA errors and stalls; a test tone and the start-up
-  sound).
+- **Check:** "Sound check" on the desktop (ring interrupts, late ones,
+  underruns, the stream's format, DMA errors; a test tone and the start-up
+  sound). Registry `TestTone` 1 plays 440 Hz left then 880 Hz right at
+  start-up and logs how the ring's interrupts came (`test tone done: ...`).
 
 ## Disk, read only: `ipoddsk.dll` (`src\drivers\ipoddsk`)
 
