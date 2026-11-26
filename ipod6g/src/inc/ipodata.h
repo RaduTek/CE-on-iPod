@@ -11,7 +11,7 @@
 extern "C" {
 #endif
 
-#define IPODATA_VERSION         2
+#define IPODATA_VERSION         3
 #define IPODATA_SECTOR_BYTES    512
 #define IPODATA_MAX_SECTORS     128     // per read call (64 KB, the DMA buffer)
 
@@ -107,6 +107,13 @@ typedef struct {
     DWORD   dmaReads;       // reads done by DMA
     DWORD   dmaTimeouts;
 
+    // DMA completion by interrupt (IpodAta_UseInterrupt); 0 = polled
+    DWORD   sysIntr;        // the SYSINTR in use, 0 = none
+    DWORD   intrError;      // InterruptInitialize failed: GetLastError()
+    DWORD   intrWakes;      // DMA reads ended by the interrupt
+    DWORD   intrMissed;     // ... where the transfer was done but no interrupt came in time
+    DWORD   intrSpurious;   // the event fired with the transfer not done
+
     // registers now
     DWORD   control;
     DWORD   cfg;
@@ -127,6 +134,11 @@ DWORD IpodAta_Attach(BOOL useDma);
 
 // Reads count sectors of 512 bytes. 0 = ok. There is no write function.
 DWORD IpodAta_Read(DWORD lbaLow, DWORD lbaHigh, DWORD count, BYTE *pOut);
+
+// DMA reads wait for the ATA interrupt on sysIntr (SYSINTR_ATA) instead of
+// polling. Quiets the controller's interrupt sources first. FALSE = it
+// could not be set up: polling stays (intrError says why).
+BOOL  IpodAta_UseInterrupt(DWORD sysIntr);
 
 void  IpodAta_GetStatus(IPODATA_STATUS *pOut);
 

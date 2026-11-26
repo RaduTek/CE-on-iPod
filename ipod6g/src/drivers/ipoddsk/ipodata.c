@@ -21,8 +21,11 @@
 // physically contiguous memory; data is copied out of it. The mode (UDMA
 // up to 4, else multiword DMA up to 2) and the controller's timing for it
 // follow Rockbox's ata_power_up(); its timing values are HClk cycles worked
-// out for 108 MHz, so at a slower clock they only get longer. Completion is
-// polled (ATA_IRQ bit 0); the ATA interrupt stays masked in the VIC. A DMA
+// out for 108 MHz, so at a slower clock they only get longer. Completion
+// (ATA_IRQ bit 0) wakes the reader through the ATA interrupt (SYSINTR_ATA,
+// IRQ 29) once IpodAta_UseInterrupt has set it up, else it is polled. The
+// controller's interrupt mask is set only while a transfer runs, and
+// ATA_IRQ is cleared before InterruptDone unmasks the line again. A DMA
 // read that fails resets the disk and is done again in PIO.
 //
 // Every register of the disk itself is reached through the controller: a
@@ -122,6 +125,7 @@ static IPODATA_STATUS g_st;
 static WORD g_ident[256];
 static BYTE *g_pDmaBuf = NULL;          // DMA_BUF_BYTES, uncached; physical address in g_st.dmaBufPhys
 static DWORD g_dmaCfg = 0;              // ATA_CFG bits for the chosen DMA mode, 0 = PIO
+static HANDLE g_hIntr = NULL;           // event of SYSINTR g_st.sysIntr, NULL = polled
 
 // The controller's timing register for each mode (Rockbox, S5L8702, HClk 108 MHz).
 static const DWORD g_udmaTime[5] = { 0x4071152, 0x2050D52, 0x2030A52, 0x1020A52, 0x1010A52 };
@@ -563,24 +567,52 @@ static DWORD DmaIn(DWORD bytes)
     ATA_WR(ATA_COMMAND, ATA_COMMAND_START);
 
     start = GetTickCount();
-    for (;;)
+    if (g_hIntr != NULL)
     {
+        DWORD wr = WaitForSingleObject(g_hIntr, DMA_WAIT_MS);
+
         if (ATA_RD(ATA_IRQ) & ATA_IRQ_XFER_DONE)
         {
             done = 1;
-            break;
+            if (wr == WAIT_OBJECT_0)
+                g_st.intrWakes++;
+            else
+                g_st.intrMissed++;          // done, but the interrupt never came
         }
-        if (GetTickCount() - start >= DMA_WAIT_MS || loops >= DMA_WAIT_MS + SPIN_LOOPS)
-            break;
-        if (++loops > SPIN_LOOPS)
-            Sleep(1);
+        else if (wr == WAIT_OBJECT_0)
+        {
+            // woken with the transfer not done: the line stays masked (the
+            // ISR masked it) and the rest of this transfer is polled below
+            g_st.intrSpurious++;
+        }
+    }
+    if (!done && (g_hIntr == NULL || GetTickCount() - start < DMA_WAIT_MS))
+    {
+        for (;;)
+        {
+            if (ATA_RD(ATA_IRQ) & ATA_IRQ_XFER_DONE)
+            {
+                done = 1;
+                break;
+            }
+            if (GetTickCount() - start >= DMA_WAIT_MS || loops >= DMA_WAIT_MS + SPIN_LOOPS)
+                break;
+            if (++loops > SPIN_LOOPS)
+                Sleep(1);
+        }
     }
 
-    // stop and tidy up in every case
+    // stop and tidy up in every case: the controller's source is masked and
+    // cleared before the line is unmasked, so it cannot fire again
     ATA_WR(ATA_COMMAND, ATA_COMMAND_STOP);
     ATA_WR(ATA_CFG, ATA_RD(ATA_CFG) & ~ATA_CFG_CLEAR_END);
     ATA_WR(ATA_IRQ_MASK, 0);
     ATA_WR(ATA_IRQ, ATA_IRQ_ALL);
+    if (g_hIntr != NULL)
+    {
+        WaitForSingleObject(g_hIntr, 0);    // an interrupt that came after the wait gave up
+        InterruptDone(g_st.sysIntr);
+    }
     if (!done)
     {
         g_st.dmaTimeouts++;
@@ -712,6 +744,42 @@ DWORD IpodAta_Read(DWORD lbaLow, DWORD lbaHigh, DWORD count, BYTE *pOut)
     g_st.lastReadMs = GetTickCount() - t0;
     g_st.lastReadSectors = count;
     return IPODATA_OK;
+}
+
+BOOL IpodAta_UseInterrupt(DWORD sysIntr)
+{
+    HANDLE hEvent;
+
+    if (!g_st.mapped || sysIntr == 0 || g_hIntr != NULL)
+        return FALSE;
+    if (CLK_RD(CLK_PWRCON0) & PWRCON0_ATA)
+        return FALSE;               // no clock: the controller's registers cannot be reached
+
+    // Quiet the source before the line is enabled: Rockbox or the
+    // bootloader may have left a status bit set or the mask on, and an
+    // asserted line would storm the kernel before the first transfer.
+    ATA_WR(ATA_IRQ_MASK, 0);
+    ATA_WR(ATA_IRQ, ATA_IRQ_ALL);
+
+    hEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
+    if (hEvent == NULL)
+    {
+        g_st.intrError = GetLastError();
+        return FALSE;
+    }
+    if (!InterruptInitialize(sysIntr, hEvent, NULL, 0))
+    {
+        g_st.intrError = GetLastError();
+        CloseHandle(hEvent);
+        RETAILMSG(1, (L"ipodata: InterruptInitialize(%u) failed, error %u: DMA completion stays polled\r\n",
+                      sysIntr, g_st.intrError));
+        return FALSE;
+    }
+    g_st.sysIntr = sysIntr;
+    g_hIntr = hEvent;
+    RETAILMSG(1, (L"ipodata: DMA completion by interrupt, SysIntr %u (ATA_IRQ was %x, mask %x at boot)\r\n",
+                  sysIntr, g_st.bootIrq, g_st.bootIrqMask));
+    return TRUE;
 }
 
 void IpodAta_GetStatus(IPODATA_STATUS *pOut)

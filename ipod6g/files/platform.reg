@@ -79,6 +79,9 @@ ENDIF BSP_NODISPLAY !
     ; 1 = reads by DMA (the controller's own bus master, the fastest mode the
     ; disk offers); 0 = PIO only, as before. A failed DMA read is redone in PIO.
     "UseDma"=dword:1
+    ; DMA reads end on the ATA interrupt: 0x12 = SYSINTR_ATA (bsp_cfg.h, IRQ 29).
+    ; 0 = completion polled.
+    "SysIntr"=dword:12
 
 ; How the storage manager treats that disk: mount what is there under \iPod,
 ; never partition, never format. "Attrib" 1 = a read-only store: that is the

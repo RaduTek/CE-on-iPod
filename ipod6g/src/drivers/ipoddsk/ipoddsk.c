@@ -34,9 +34,11 @@
 #include <ceddk.h>
 #include <pkfuncs.h>
 #include <devload.h>
+#include <nkintr.h>
 #include <diskio.h>
 #include <storemgr.h>
 
+#include <bsp_cfg.h>
 #include <ipodata.h>
 #include <dskparse.h>
 #include <ipoddsk.h>
@@ -380,13 +382,16 @@ static BOOL Refuse(DWORD *pCounter, DWORD error)
 DWORD DSK_Init(LPCTSTR pContext, DWORD dwBusContext)
 {
     HKEY hKey;
-    DWORD useDma;
+    DWORD useDma, sysIntr;
+    IPODATA_STATUS st;
 
     UNREFERENCED_PARAMETER(dwBusContext);
 
-    // the driver's own registry key: "UseDma" 0 = PIO only (default 1)
+    // the driver's own registry key: "UseDma" 0 = PIO only (default 1);
+    // "SysIntr" for DMA completion (default SYSINTR_ATA), 0 = polled
     hKey = OpenDeviceKey(pContext);
     useDma = RegDword(hKey, L"UseDma", 1);
+    sysIntr = RegDword(hKey, L"SysIntr", SYSINTR_ATA);
     if (hKey != NULL)
         RegCloseKey(hKey);
 
@@ -395,6 +400,11 @@ DWORD DSK_Init(LPCTSTR pContext, DWORD dwBusContext)
     g_ds.version = IPODDSK_VERSION;
     IpodAta_Init();
     Setup(useDma != 0);
+
+    // the interrupt only once DMA is in use (the reads above were polled)
+    IpodAta_GetStatus(&st);
+    if (st.dmaMode != IPODATA_MODE_PIO && sysIntr != 0)
+        IpodAta_UseInterrupt(sysIntr);
     return 1;                   // stay loaded in any case, so the panel can say what is wrong
 }
 

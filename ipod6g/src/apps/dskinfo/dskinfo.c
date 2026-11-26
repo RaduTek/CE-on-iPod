@@ -305,6 +305,12 @@ static void Paint(HDC hdc)
                  g_st.ata.dmaMode & 0x0F, g_st.ata.dmaWanted, g_st.ata.modeError,
                  g_st.ata.dmaReads, g_st.ata.dmaTimeouts);
         Line(hdc, &y, sz);
+        if (g_st.ata.sysIntr)
+            wsprintf(sz, L"  interrupt %u: woke %u, missed %u, spurious %u",
+                     g_st.ata.sysIntr, g_st.ata.intrWakes, g_st.ata.intrMissed, g_st.ata.intrSpurious);
+        else
+            wsprintf(sz, L"  DMA completion polled (interrupt error %u)", g_st.ata.intrError);
+        Line(hdc, &y, sz);
         if (g_st.ata.errors || !g_st.ready)
         {
             wsprintf(sz, L"disk: step %u code %u status %02X error %02X, errors %u",

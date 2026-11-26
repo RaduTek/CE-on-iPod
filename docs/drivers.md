@@ -60,8 +60,11 @@ the click wheel in particular will need their own set-up there (see each
 
 - `DSK1:`, a block device for the storage manager, on top of `ipodata.c`:
   the S5L8702's ATA controller, reads by DMA (the controller's own bus master,
-  fastest UDMA/MWDMA mode the disk offers, completion polled; registry
-  `UseDma` 0 = PIO only; a failed DMA read is reset and redone in PIO).
+  fastest UDMA/MWDMA mode the disk offers; a failed DMA read is reset and
+  redone in PIO). Registry `UseDma` 0 = PIO only. The end of a transfer
+  wakes the reader through `SYSINTR_ATA` (0x12, IRQ 29; registry `SysIntr`,
+  0 = polled); the controller's interrupt sources are quieted before the
+  line is enabled, and cleared before every `InterruptDone`.
   PIO: about 1.9 MB/s raw, 1.8 MB/s through the file system (iFlash).
   DMA (UDMA 4): 6720 KB/s through the file system ("Verify file", 80 GB
   iPod, 2026-11-26), 3.7 times PIO.

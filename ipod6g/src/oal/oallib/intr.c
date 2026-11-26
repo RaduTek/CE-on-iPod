@@ -6,6 +6,8 @@
 //   SYSINTR_UART0    <-> S5L_IRQ_UART0 (24)
 //   SYSINTR_AUDIO    <-> S5L_IRQ_DMAC0 (16), DMA controller 0: the sound
 //                        driver's channel 2 (terminal count per ring block)
+//   SYSINTR_ATA      <-> S5L_IRQ_ATA (29), the ATA controller: the disk
+//                        driver's DMA transfer done (ATA_IRQ bit 0)
 //
 // A device IRQ is masked in the VIC by the ISR and unmasked by
 // OEMInterruptDone; the driver's IST clears the source in its controller.
@@ -55,6 +57,7 @@ static UINT32 SysIntrToIrq(DWORD dwSysIntr)
     case SYSINTR_RESCHED:   return S5L_IRQ_TIMER;
     case SYSINTR_UART0:     return S5L_IRQ_UART0;
     case SYSINTR_AUDIO:     return S5L_IRQ_DMAC0;
+    case SYSINTR_ATA:       return S5L_IRQ_ATA;
     default:                return S5L_IRQ_MAX;
     }
 }
@@ -207,6 +210,13 @@ ULONG OEMInterruptHandler(ULONG ra)
         // the DMA controller, then InterruptDone unmasks the line
         IrqDisable(S5L_IRQ_DMAC0);
         sysIntr = SYSINTR_AUDIO;
+    }
+    else if (status0 & (1u << S5L_IRQ_ATA))
+    {
+        // the disk driver clears ATA_IRQ and masks it in the controller,
+        // then InterruptDone unmasks the line
+        IrqDisable(S5L_IRQ_ATA);
+        sysIntr = SYSINTR_ATA;
     }
     else
     {

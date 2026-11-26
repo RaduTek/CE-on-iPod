@@ -14,8 +14,9 @@ extern "C" {
 // SYSINTR_RESCHED (kernel defined) <-> S5L_IRQ_TIMER (timer B tick)
 #define SYSINTR_UART0           (SYSINTR_FIRMWARE+0)    // S5L_IRQ_UART0
 #define SYSINTR_AUDIO           (SYSINTR_FIRMWARE+1)    // S5L_IRQ_DMAC0 (= 17, sound driver)
+#define SYSINTR_ATA             (SYSINTR_FIRMWARE+2)    // S5L_IRQ_ATA (= 18, disk driver: DMA done)
 
-#define SYSINTR_ENDOFSTATIC     (SYSINTR_FIRMWARE+1)
+#define SYSINTR_ENDOFSTATIC     (SYSINTR_FIRMWARE+2)
 
 #if __cplusplus
 }
