@@ -74,7 +74,10 @@ the click wheel in particular will need their own set-up there (see each
   a disk without partitions. With the whole disk shown, Microsoft's
   partition driver rejected the iPod's table (store `attr 4` = unformatted,
   0 partitions) on two iTunes-formatted iPods (80 GB HDD and 128 GB
-  iFlash). The driver logs sector 0's table at start-up
+  iFlash). Cause (80 GB iPod's log): entry 0 is the FAT32 partition (type
+  0C, start 49278) and entry 1 Apple's firmware partition (type 3F, start
+  63); mspart rejects a table whose start sectors go down
+  (`GetDOSPartitions`). The driver logs sector 0's table at start-up
   (`ipoddsk: partition N: ...`); the panel shows it too.
 - **Expects:** the disk powered and spun up, its pins set up, the controller
   enabled (Rockbox has just read the image from it). PATA only: a CE-ATA

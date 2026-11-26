@@ -24,8 +24,10 @@
 // partition table (and Apple's firmware partition) stay out of sight. The
 // storage manager then takes the store as a disk without partitions and
 // mounts the FAT32 file system on all of it. Microsoft's partition driver
-// (mspart) did not accept the iPod's own partition table in 4096-byte
-// sectors (store "unformatted", 0 partitions; 2026-11-26).
+// (mspart) refuses the iPod's own table: it lists the FAT32 partition
+// (0C, start 49278) before Apple's firmware partition (3F, start 63), and
+// mspart rejects any table whose start sectors go down (store
+// "unformatted", 0 partitions; 2026-11-26, 80 GB iPod).
 //
 #include <windows.h>
 #include <winioctl.h>

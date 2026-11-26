@@ -144,8 +144,11 @@ display, HDD, PMU/backlight, clickwheel, audio.
 - 2026-11-26: **iPod disk mounts as `\iPod`** (apps launch and files open from it). With the whole
   disk shown in 4096-byte sectors, mspart rejected the iPod's partition table (store `attr 4` =
   unformatted, 0 partitions; 80 GB HDD and 128 GB iFlash). ipoddsk now shows Windows only the
-  FAT32 partition (volume only, no MBR), mounted without a partition table. The rejected table
-  entries were not captured (start-up log `ipoddsk: partition N: ...` prints them).
+  FAT32 partition (volume only, no MBR), mounted without a partition table. Cause (bootlog):
+  the table lists FAT32 first (0C, start 49278, size 19488407) and the firmware partition second
+  (3F, start 63, size 49152; units of 4096 B); mspart rejects start sectors that go down.
+  Log on success: `ipoddsk: volume at disk block 394224 (partition 0, start 49278 x 8)`, then
+  `Partition PART00  NumSectors=19488407`.
 
 ## Display driver (src/drivers/ipodlcd) - test pattern verified on hardware 2026-11-19
 - `ipodlcd.dll`, GPE flat driver (structure from CEonPi raspiBasic_ddi), loaded by GWES (SHMK).
