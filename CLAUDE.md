@@ -149,6 +149,11 @@ display, HDD, PMU/backlight, clickwheel, audio.
   (3F, start 63, size 49152; units of 4096 B); mspart rejects start sectors that go down.
   Log on success: `ipoddsk: volume at disk block 394224 (partition 0, start 49278 x 8)`, then
   `Partition PART00  NumSectors=19488407`.
+- 2026-11-26: **Disk reads by DMA verified** (ROLO and cold): UDMA 4 (Rockbox leaves controller and
+  disk in UDMA 4 on both starts), no failed DMA reads, Verify file 6720 KB/s (PIO ~1800). Plan:
+  DMA completion by interrupt next, then writes behind registry `AllowWrite` (cache on + flushes).
+  Panels' buttons now work from the click wheel via `src\inc\panelkeys.h` (IsDialogMessage did
+  not help plain windows on CE 7).
 
 ## Display driver (src/drivers/ipodlcd) - test pattern verified on hardware 2026-11-19
 - `ipodlcd.dll`, GPE flat driver (structure from CEonPi raspiBasic_ddi), loaded by GWES (SHMK).

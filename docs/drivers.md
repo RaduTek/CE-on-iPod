@@ -63,7 +63,8 @@ the click wheel in particular will need their own set-up there (see each
   fastest UDMA/MWDMA mode the disk offers, completion polled; registry
   `UseDma` 0 = PIO only; a failed DMA read is reset and redone in PIO).
   PIO: about 1.9 MB/s raw, 1.8 MB/s through the file system (iFlash).
-  DMA: not measured yet (2026-11-26).
+  DMA (UDMA 4): 6720 KB/s through the file system ("Verify file", 80 GB
+  iPod, 2026-11-26), 3.7 times PIO.
 - Read only twice over: `ipodata.c` has no write command at all, and every
   write, format and delete request is refused before it is called. The
   storage manager is told the store is read only (`Attrib` 1), so programs
@@ -178,3 +179,6 @@ the click wheel in particular will need their own set-up there (see each
 `wavpanel.exe` (Sound check), `dskinfo.exe` (iPod disk), `pwrinfo.exe`
 (Power status): read-outs of what each driver found, for bring-up and for a
 photograph when something goes wrong. Nothing in them changes anything.
+Their buttons work from the click wheel (`src\inc\panelkeys.h`): Tab or the
+wheel moves between them, Enter (centre) or Space presses one.
+`IsDialogMessage` did not do this for these plain windows on CE 7.

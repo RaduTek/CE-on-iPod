@@ -14,6 +14,7 @@
 #include <storemgr.h>
 
 #include <ipoddsk.h>
+#include <panelkeys.h>
 
 #define IDC_REFRESH     101
 #define IDC_VERIFY      102
@@ -23,6 +24,7 @@
 #define MODEL_NUMBER    71              // "ip6g" in the image header's checksum
 
 static HWND     g_hWnd, g_hRefresh;
+static HWND     g_hButtons[2];          // in Tab order, for panelkeys.h
 static HFONT    g_hFont;
 static HANDLE   g_hDev = INVALID_HANDLE_VALUE;
 static DWORD    g_devErr = 0;
@@ -333,8 +335,9 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         hInst = ((LPCREATESTRUCT)lParam)->hInstance;
         g_hRefresh = CreateWindow(L"BUTTON", L"Refresh", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
                                   4, 2, 80, BTN_H, hWnd, (HMENU)IDC_REFRESH, hInst, NULL);
-        CreateWindow(L"BUTTON", L"Verify file (15 s)", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                     90, 2, 130, BTN_H, hWnd, (HMENU)IDC_VERIFY, hInst, NULL);
+        g_hButtons[0] = g_hRefresh;
+        g_hButtons[1] = CreateWindow(L"BUTTON", L"Verify file (15 s)", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                                     90, 2, 130, BTN_H, hWnd, (HMENU)IDC_VERIFY, hInst, NULL);
         return 0;
 
     case WM_COMMAND:
@@ -418,8 +421,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     Fetch();
     InvalidateRect(g_hWnd, NULL, FALSE);
 
+    // the buttons' keys first (Tab/arrows move, Enter/Space press: panelkeys.h)
     while (GetMessage(&msg, NULL, 0, 0))
     {
+        if (PanelKeys_Handle(g_hWnd, g_hButtons, 2, &msg))
+            continue;
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }

@@ -13,6 +13,7 @@
 #include <mmsystem.h>
 
 #include <ipodpcm.h>
+#include <panelkeys.h>
 
 #define IDC_TONE        101
 #define IDC_CHIME       102
@@ -28,6 +29,7 @@
 #define NOT_YET         0xFFFF
 
 static HWND     g_hWnd, g_hTone;
+static HWND     g_hButtons[3];          // in Tab order, for panelkeys.h
 static HFONT    g_hFont;
 static HANDLE   g_hDev = INVALID_HANDLE_VALUE;
 static IPODPCM_STATUS g_st;
@@ -260,10 +262,11 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         hInst = ((LPCREATESTRUCT)lParam)->hInstance;
         g_hTone = CreateWindow(L"BUTTON", L"Tone (3 s)", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
                                4, 2, 100, BTN_H, hWnd, (HMENU)IDC_TONE, hInst, NULL);
-        CreateWindow(L"BUTTON", L"Chime", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                     110, 2, 80, BTN_H, hWnd, (HMENU)IDC_CHIME, hInst, NULL);
-        CreateWindow(L"BUTTON", L"Stop", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                     196, 2, 70, BTN_H, hWnd, (HMENU)IDC_STOP, hInst, NULL);
+        g_hButtons[0] = g_hTone;
+        g_hButtons[1] = CreateWindow(L"BUTTON", L"Chime", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                                     110, 2, 80, BTN_H, hWnd, (HMENU)IDC_CHIME, hInst, NULL);
+        g_hButtons[2] = CreateWindow(L"BUTTON", L"Stop", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                                     196, 2, 70, BTN_H, hWnd, (HMENU)IDC_STOP, hInst, NULL);
         SetTimer(hWnd, 1, 500, NULL);
         return 0;
 
@@ -373,8 +376,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     Fetch();
     InvalidateRect(g_hWnd, NULL, FALSE);
 
+    // the buttons' keys first (Tab/arrows move, Enter/Space press: panelkeys.h)
     while (GetMessage(&msg, NULL, 0, 0))
     {
+        if (PanelKeys_Handle(g_hWnd, g_hButtons, 3, &msg))
+            continue;
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
