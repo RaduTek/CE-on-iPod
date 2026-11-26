@@ -32,8 +32,8 @@ These are hardware features that are functional
 |-|-|-|
 | UART | Basic | Dock connector serial (UART0), 115200 8N1, no flow control. Used for KITL debugger connection with Visual Studio |
 | Display | Basic | 320x240 RGB565 only. Screen updates are pushed to the LCD by the CPU, no DMA or acceleration whatsoever |
-| Audio output | Basic | I2S + DMA into the codec, at the sample rate Rockbox left it at. Needs Rockbox to have run first (Windows CE started from Rockbox); not tried from the bootloader |
-| ATA HDD | Read only (writes opt-in) | PATA (not CE-ATA), UDMA with interrupt, 6.7-9 MB/s reads through the file system. Mounted as \iPod. Writing is off unless registry `AllowWrite` is 1 (write test passes: 4 MB written, flushed, read back) |
+| Audio output | Basic | I2S + DMA into the codec at 44.1 kHz, through Windows' wave API with codec volume control. The driver sets up I2S and the codec itself, so it works whether Windows CE is started from Rockbox or from the bootloader (PLAY) |
+| ATA HDD | Read/write | PATA (not CE-ATA) hard disks and flash adapters (iFlash). UDMA with interrupt: 6.7 MB/s (HDD) to 9 MB/s (iFlash) reads, 11 MB/s writes (iFlash) through the file system. The FAT32 volume is mounted as \iPod. Writing is on in this image (registry `AllowWrite` 1, 0 = read only); the disk's write cache is flushed 2 s after the last write and before a restart. After 10 s unused (`IdleTimeout`) the disk is switched off at the PMU (`IdlePowerOff` 1, 0 = spin down only); the next access powers it back up (about 2.5 s on the iFlash) |
 | Battery | Basic | Level and charging through the PMU, taskbar icon |
 | Real-time clock | Basic | Time read from the PMU at start-up |
 | Clickwheel | Basic | Wheel and buttons as keys. Needs the wheel controller running as Rockbox leaves it |
@@ -44,8 +44,7 @@ These are hardware features that are functional
 
 | Feature | Comments |
 |-|-|
-| ATA HDD | Writing; CE-ATA models |
-| Starting from the bootloader | Codec and click wheel set-up of their own, for the PLAY start where Rockbox never runs |
+| ATA HDD | CE-ATA models |
 | USB Function | Let the iPod be connected as a USB device to a computer (for Mass Storage) |
 
 ## Notes
