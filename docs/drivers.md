@@ -102,9 +102,18 @@ the click wheel in particular will need their own set-up there (see each
   enabled (Rockbox has just read the image from it). PATA only: a CE-ATA
   disk (later models) is refused with its own error code (written from
   Rockbox's sources; no CE-ATA iPod was at hand to try).
-- **Does not:** power the disk; besides reads, writes and flushes it sends
+- **Spins the disk down when unused:** after registry `IdleTimeout`
+  seconds (10 in `platform.reg`; 30 without the value; 0 = never) without
+  a read or write, the driver's idle
+  thread flushes and sends STANDBY IMMEDIATE (0xE0), as Rockbox's
+  `ata_sleepnow()` does. The disk stays powered and the controller as it
+  is; the next read or write spins it up by itself, and that transfer's
+  waits get 15 s extra. Log: `ipodata: disk spun down (standby) in N ms`,
+  `ipodata: disk spun up for a transfer in N ms`.
+- **Does not:** power the disk off (planned: level 2, Rockbox's
+  `ata_power_down()`); besides reads, writes, flushes and standby it sends
   only the transfer mode (SET FEATURES 0x03) and a software reset after a
-  failed DMA transfer; no sleep or standby.
+  failed DMA transfer.
 - **Check:** "iPod disk" on the desktop (the volume found, reads, writes,
   flushes and refusals, the last error and the step it happened at, the
   stores Windows lists; "Verify file" reads `\iPod\wince.ipod` to its end
@@ -167,16 +176,16 @@ the click wheel in particular will need their own set-up there (see each
   left alone (this path was not tested on purpose). Reports become events (`whlcore.c`): a button down or up, the
   wheel one step on (24 steps a turn).
 - `whlkeys.exe` (started with Windows) turns the events into keys: wheel =
-  Down (clockwise) and Up, centre = Enter, MENU = Escape (held 0.6 s: the
-  Start menu), play/pause, next and previous = the media keys. A program in
-  front can ask for the wheel to be the volume keys instead
-  (`WM_WHLKEYS_MODE`).
+  Down (clockwise) and Up, centre = Enter, MENU = Escape (held 0.6 s:
+  `WM_CLOSE` to the window in front, not the desktop or taskbar; CE 7
+  ignores Alt+F4, tried), play/pause (sent when let go; held 0.6 s: the
+  Start menu), next and previous = the media keys. A program in front can
+  ask for the wheel to be the volume keys instead (`WM_WHLKEYS_MODE`).
 - Navigation mode (`HKLM\Software\iPod\WheelKeys`, `Navigation` = 1, the
   image's default; read when `whlkeys.exe` starts): next/previous = Tab /
   Shift+Tab, play switches the wheel between Down/Up and Right/Left
-  (clockwise = Right), play held 0.6 s = `WM_CLOSE` to the window in front
-  (not the desktop or taskbar; CE 7 ignores Alt+F4, tried). `Navigation` 0
-  = the media keys above.
+  (clockwise = Right); MENU and play held as above. `Navigation` 0 = the
+  media keys above.
 - `IOCTL_IPODWHL_GET_STATUS` gives the counters plus the finger's position
   (0 to 95) and whether the wheel is touched, without taking events.
 - **Expects:** the wheel controller running as Rockbox left it.

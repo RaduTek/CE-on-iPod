@@ -12,7 +12,8 @@
 // The commands this file can send, and no others (there is no way to pass
 // a command in): IDENTIFY DEVICE (0xEC); READ SECTORS (0x20/0x24 EXT), READ
 // DMA (0xC8/0x25 EXT); WRITE SECTORS (0x30/0x34 EXT), WRITE DMA (0xCA/0x35
-// EXT); FLUSH CACHE (0xE7/0xEA EXT); SET FEATURES (0xEF) subcommand 0x03
+// EXT); FLUSH CACHE (0xE7/0xEA EXT); STANDBY IMMEDIATE (0xE0, spin down;
+// the next command spins the disk up); SET FEATURES (0xEF) subcommand 0x03
 // (transfer mode) only; and a software reset through the device control
 // register after a failed DMA transfer. Whether writing is allowed at all
 // is decided by ipoddsk.c (registry AllowWrite), which calls IpodAta_Write
@@ -105,6 +106,7 @@
 #define CMD_WRITE_DMA           0xCA
 #define CMD_FLUSH_CACHE         0xE7
 #define CMD_FLUSH_CACHE_EXT     0xEA
+#define CMD_STANDBY_IMMEDIATE   0xE0
 #define CMD_IDENTIFY            0xEC
 #define CMD_SET_FEATURES        0xEF
 #define FEATURE_TRANSFER_MODE   0x03
@@ -118,9 +120,12 @@
 #define READY_LOOPS         200000      // per register access
 #define SPIN_LOOPS          50          // short waits are spun, longer ones sleep
 #define IDENTIFY_WAIT_MS    5000
-#define READ_WAIT_MS        2000
-#define WRITE_WAIT_MS       5000
-#define DMA_WAIT_MS         5000
+// The waits of a transfer; g_spinUpMs is added to all of them for the first
+// transfer after IpodAta_Standby (the disk spins up before it answers).
+#define READ_WAIT_MS        (2000 + g_spinUpMs)
+#define WRITE_WAIT_MS       (5000 + g_spinUpMs)
+#define DMA_WAIT_MS         (5000 + g_spinUpMs)
+#define SPINUP_WAIT_MS      15000
 #define FLUSH_WAIT_MS       10000       // a disk may write back several MB of cache
 #define RESET_WAIT_MS       5000
 #define DMA_BUF_BYTES       (IPODATA_MAX_SECTORS * IPODATA_SECTOR_BYTES)
@@ -140,6 +145,7 @@ static WORD g_ident[256];
 static BYTE *g_pDmaBuf = NULL;          // DMA_BUF_BYTES, uncached; physical address in g_st.dmaBufPhys
 static DWORD g_dmaCfg = 0;              // ATA_CFG bits for the chosen DMA mode, 0 = PIO
 static HANDLE g_hIntr = NULL;           // event of SYSINTR g_st.sysIntr, NULL = polled
+static DWORD g_spinUpMs = 0;            // extra wait for this transfer: SPINUP_WAIT_MS after standby
 
 // The controller's timing register for each mode (Rockbox, S5L8702, HClk 108 MHz).
 static const DWORD g_udmaTime[5] = { 0x4071152, 0x2050D52, 0x2030A52, 0x1020A52, 0x1010A52 };
@@ -812,6 +818,33 @@ static DWORD CheckRequest(DWORD lbaLow, DWORD lbaHigh, DWORD count, const void *
     return IPODATA_OK;
 }
 
+// Before a read or write: extra time for every wait if the disk was spun
+// down. The command spins it up whatever comes of it, so the flag goes.
+static void SpinUpBegin(void)
+{
+    g_spinUpMs = g_st.standby ? SPINUP_WAIT_MS : 0;
+    g_st.standby = 0;
+}
+
+// After it: how long the spin-up took.
+static void SpinUpEnd(DWORD rc, DWORD t0)
+{
+    DWORD ms;
+
+    if (g_spinUpMs == 0)
+        return;
+    g_spinUpMs = 0;
+    ms = GetTickCount() - t0;
+    if (rc == IPODATA_OK)
+    {
+        g_st.spinUps++;
+        g_st.lastSpinUpMs = ms;
+        if (ms > g_st.maxSpinUpMs)
+            g_st.maxSpinUpMs = ms;
+    }
+    RETAILMSG(1, (L"ipodata: disk spun up for a transfer in %u ms%s\r\n", ms, rc == IPODATA_OK ? L"" : L", FAILED"));
+}
+
 DWORD IpodAta_Read(DWORD lbaLow, DWORD lbaHigh, DWORD count, BYTE *pOut)
 {
     DWORD rc, t0;
@@ -822,6 +855,7 @@ DWORD IpodAta_Read(DWORD lbaLow, DWORD lbaHigh, DWORD count, BYTE *pOut)
 
     t0 = GetTickCount();
     g_st.reads++;
+    SpinUpBegin();
     if (g_st.dmaMode != IPODATA_MODE_PIO)
     {
         rc = ReadOnce(lbaLow, lbaHigh, count, pOut, TRUE);
@@ -843,6 +877,7 @@ DWORD IpodAta_Read(DWORD lbaLow, DWORD lbaHigh, DWORD count, BYTE *pOut)
     {
         rc = ReadOnce(lbaLow, lbaHigh, count, pOut, FALSE);
     }
+    SpinUpEnd(rc, t0);
     if (rc != IPODATA_OK)
         return rc;
 
@@ -862,6 +897,7 @@ DWORD IpodAta_Write(DWORD lbaLow, DWORD lbaHigh, DWORD count, const BYTE *pIn)
 
     t0 = GetTickCount();
     g_st.writes++;
+    SpinUpBegin();
     if (g_st.dmaMode != IPODATA_MODE_PIO)
     {
         memcpy(g_pDmaBuf, pIn, count * IPODATA_SECTOR_BYTES);
@@ -884,6 +920,7 @@ DWORD IpodAta_Write(DWORD lbaLow, DWORD lbaHigh, DWORD count, const BYTE *pIn)
     {
         rc = WriteOnce(lbaLow, lbaHigh, count, pIn, FALSE);
     }
+    SpinUpEnd(rc, t0);
     if (rc != IPODATA_OK)
     {
         RETAILMSG(1, (L"ipodata: WRITE at %u+%u FAILED (step %u code %u status %02x error %02x)\r\n",
@@ -906,6 +943,8 @@ DWORD IpodAta_Flush(void)
         return Fail(IPODATA_STEP_CHECK, IPODATA_E_NOT_ATTACHED);
     if (g_st.flushCmd == 0)
         return IPODATA_OK;                  // the disk has no flush command
+    if (g_st.standby)
+        return IPODATA_OK;                  // standby wrote the cache back; do not spin up for nothing
 
     t0 = GetTickCount();
     g_st.flushes++;
@@ -931,6 +970,47 @@ DWORD IpodAta_Flush(void)
                       rc, g_st.lastStatus, g_st.lastError));
     }
     return rc;
+}
+
+DWORD IpodAta_Standby(void)
+{
+    DWORD rc, v, t0;
+
+    g_st.lastStep = 0;
+    g_st.lastCode = IPODATA_OK;
+    if (!g_st.attached)
+        return Fail(IPODATA_STEP_CHECK, IPODATA_E_NOT_ATTACHED);
+    if (g_st.standby)
+        return IPODATA_OK;
+
+    // as Rockbox's ata_sleepnow(): STANDBY IMMEDIATE writes back the cache
+    // too, so it gets the time a flush gets
+    t0 = GetTickCount();
+    ATA_WR(ATA_COMMAND, ATA_COMMAND_STOP);
+    rc = WaitReadyForCommand(FLUSH_WAIT_MS);
+    if (rc == IPODATA_OK && (!DiskWrite(ATA_PIO_DVR, 0) || !DiskWrite(ATA_PIO_CSD, CMD_STANDBY_IMMEDIATE)))
+        rc = IPODATA_E_HANDSHAKE;
+    if (rc == IPODATA_OK)
+        rc = WaitNotBusy(FLUSH_WAIT_MS);
+    if (rc == IPODATA_OK)
+    {
+        if (!DiskRead(ATA_PIO_DAD, &v))
+            rc = IPODATA_E_HANDSHAKE;
+        else if ((g_st.lastStatus = v & 0xFF) & ST_ERR)
+            rc = NoteDeviceError();
+    }
+    if (rc != IPODATA_OK)
+    {
+        g_st.spinDownErrors++;
+        Fail(IPODATA_STEP_STANDBY, rc);
+        RETAILMSG(1, (L"ipodata: STANDBY IMMEDIATE FAILED (code %u status %02x error %02x)\r\n",
+                      rc, g_st.lastStatus, g_st.lastError));
+        return rc;
+    }
+    g_st.standby = 1;
+    g_st.spinDowns++;
+    RETAILMSG(1, (L"ipodata: disk spun down (standby) in %u ms\r\n", GetTickCount() - t0));
+    return IPODATA_OK;
 }
 
 BOOL IpodAta_UseInterrupt(DWORD sysIntr)

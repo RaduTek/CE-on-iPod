@@ -81,13 +81,17 @@ ENDIF BSP_NODISPLAY !
     ; 0 = read only: the driver refuses to be opened for writing, so the
     ; storage manager opens the store read only (creating a file: error 5).
     ; BACK UP THE IPOD'S VOLUME BEFORE SETTING 1.
-    "AllowWrite"=dword:1
+    "AllowWrite"=dword:0
     ; 1 = reads by DMA (the controller's own bus master, the fastest mode the
     ; disk offers); 0 = PIO only, as before. A failed DMA read is redone in PIO.
     "UseDma"=dword:1
     ; DMA transfers end on the ATA interrupt: 0x12 = SYSINTR_ATA (bsp_cfg.h, IRQ 29).
     ; 0 = completion polled.
     "SysIntr"=dword:12
+    ; Seconds without a read or write before the disk spins down (STANDBY
+    ; IMMEDIATE; it stays powered, the next access spins it up, which takes a
+    ; few seconds). 0 = never, 0xA = 10s, 0x1E = 30 s.
+    "IdleTimeout"=dword:A
 
 ; How the storage manager treats that disk: mount what is there under \iPod,
 ; never partition, never format. Read only or not is the driver's

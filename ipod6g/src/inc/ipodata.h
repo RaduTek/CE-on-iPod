@@ -11,7 +11,7 @@
 extern "C" {
 #endif
 
-#define IPODATA_VERSION         4
+#define IPODATA_VERSION         5
 #define IPODATA_SECTOR_BYTES    512
 #define IPODATA_MAX_SECTORS     128     // per read call (64 KB, the DMA buffer)
 
@@ -55,6 +55,7 @@ extern "C" {
 #define IPODATA_STEP_WR_DMA     14      // write: the DMA transfer
 #define IPODATA_STEP_WR_END     15      // write: after the last sector
 #define IPODATA_STEP_FLUSH      16      // flush cache
+#define IPODATA_STEP_STANDBY    17      // standby immediate (spin down)
 
 typedef struct {
     DWORD   version;
@@ -134,6 +135,14 @@ typedef struct {
     DWORD   word82;         // features supported (bit 5: write cache)
     DWORD   word85;         // features enabled (bit 5: write cache on)
 
+    // spinning down (IpodAta_Standby); the next command spins the disk up
+    DWORD   standby;        // 1: told to spin down, no command since
+    DWORD   spinDowns;
+    DWORD   spinDownErrors;
+    DWORD   spinUps;        // transfers that started with the disk in standby
+    DWORD   lastSpinUpMs;   // how long the first transfer after standby took
+    DWORD   maxSpinUpMs;
+
     // registers now
     DWORD   control;
     DWORD   cfg;
@@ -163,6 +172,12 @@ DWORD IpodAta_Write(DWORD lbaLow, DWORD lbaHigh, DWORD count, const BYTE *pIn);
 // Has the disk write its cache to the platter (FLUSH CACHE / FLUSH CACHE
 // EXT). 0 = ok, also when the disk has no such command.
 DWORD IpodAta_Flush(void);
+
+// Spins the disk down (STANDBY IMMEDIATE, which also writes back its
+// cache). The disk stays powered and the controller as it is; the next read
+// or write spins it up again by itself, and that one transfer is given
+// extra time for it. 0 = ok, also when it is in standby already.
+DWORD IpodAta_Standby(void);
 
 // DMA reads wait for the ATA interrupt on sysIntr (SYSINTR_ATA) instead of
 // polling. Quiets the controller's interrupt sources first. FALSE = it

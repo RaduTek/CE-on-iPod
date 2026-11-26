@@ -419,6 +419,11 @@ static void Paint(HDC hdc)
                  g_st.ata.flushCmd, g_st.flushes, g_st.flushesDone, g_st.flushErrors, g_st.flushPending,
                  g_st.ata.lastFlushMs, g_st.writesRefused, g_st.opensRefused, g_st.formatsRefused);
         Line(hdc, &y, sz);
+        wsprintf(sz, L"idle %u s: disk %s; down %u (failed %u), up %u, last %u ms, max %u",
+                 g_st.idleTimeout, g_st.ata.standby ? L"SPUN DOWN" : L"spinning",
+                 g_st.ata.spinDowns, g_st.ata.spinDownErrors, g_st.ata.spinUps,
+                 g_st.ata.lastSpinUpMs, g_st.ata.maxSpinUpMs);
+        Line(hdc, &y, sz);
         if (g_st.ata.errors || !g_st.ready)
         {
             wsprintf(sz, L"disk: step %u code %u status %02X error %02X, errors %u",

@@ -12,7 +12,7 @@
 extern "C" {
 #endif
 
-#define IPODDSK_VERSION     5       // 5: writes (IPODATA_STATUS version 4)
+#define IPODDSK_VERSION     6       // 6: spin down when idle (IPODATA_STATUS version 5)
 #define IPODDSK_PROFILE     L"iPodDisk"     // System\StorageManager\Profiles\iPodDisk
 
 // where the look at the disk at start-up stopped (IPODDSK_STATUS.setupStep)
@@ -61,6 +61,9 @@ typedef struct {
     DWORD   flushPending;   // written since the last flush
     DWORD   flushesDone;    // flushes sent to the disk (after writes only)
     DWORD   flushErrors;
+
+    // spinning down when idle (registry IdleTimeout; counts in ata.spin...)
+    DWORD   idleTimeout;    // seconds without a read or write before standby, 0 = never
     DWORD   getInfos;
     DWORD   deviceInfos;
     DWORD   getNames;

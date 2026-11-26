@@ -18,6 +18,11 @@
 //     thread FLUSH_DELAY_MS after the last write.
 // Format, delete and wipe requests are always refused.
 //
+// Spinning down. After "IdleTimeout" seconds (registry, default 30, 0 =
+// never) without a read or write, the idle thread flushes and sends
+// STANDBY IMMEDIATE. The disk stays powered; the next read or write spins
+// it up by itself and is given SPINUP_WAIT_MS extra (ipodata.c).
+//
 // The sector size. The disk answers in blocks of 512 bytes, but an iPod
 // that iTunes formatted has a partition table and a FAT32 file system that
 // count in 4096 bytes. So at start-up the driver looks where the FAT32 file
@@ -58,8 +63,10 @@ static BYTE             g_bounce[IPODATA_MAX_SECTORS * IPODATA_SECTOR_BYTES];
 
 #define FLUSH_DELAY_MS  2000            // the disk's cache is flushed this long after the last write
 static BOOL             g_allowWrite;   // registry AllowWrite, read once at load
-static HANDLE           g_hWritten;     // set after each write: wakes the flush thread
+static DWORD            g_idleMs;       // registry IdleTimeout (s) in ms: spin down after this long unused, 0 = never
+static HANDLE           g_hActivity;    // set after each read or write: wakes the idle thread
 static volatile DWORD   g_lastWriteTick;
+static volatile DWORD   g_lastUseTick;  // the last read or write
 
 // a read or write request as it is used here: copied out of the caller's memory once
 typedef struct {
@@ -299,6 +306,7 @@ static DWORD DoTransfer(BYTE *pIn, DWORD lenIn, BOOL write)
 
             // one command to the disk, and its data handed over, per turn of the lock
             EnterCriticalSection(&g_cs);
+            g_lastUseTick = GetTickCount();     // (under the lock: the idle thread checks it there)
             if (!write && IpodAta_Read(lbaLow, lbaHigh, n, g_bounce) != IPODATA_OK)
                 status = ERROR_READ_FAULT;
             if (status == ERROR_SUCCESS)
@@ -361,8 +369,6 @@ static DWORD DoTransfer(BYTE *pIn, DWORD lenIn, BOOL write)
             {
                 g_ds.writeErrors++;
             }
-            if (g_hWritten != NULL)
-                SetEvent(g_hWritten);       // the flush thread: flush in FLUSH_DELAY_MS
         }
         else if (status == ERROR_SUCCESS)
         {
@@ -378,6 +384,9 @@ static DWORD DoTransfer(BYTE *pIn, DWORD lenIn, BOOL write)
         {
             g_ds.readErrors++;
         }
+        g_lastUseTick = GetTickCount();
+        if (g_hActivity != NULL)
+            SetEvent(g_hActivity);          // the idle thread: flush and spin-down deadlines move
     }
 
     for (i = 0; i < opened; i++)
@@ -391,45 +400,88 @@ static DWORD DoTransfer(BYTE *pIn, DWORD lenIn, BOOL write)
 // the disk's write cache
 //
 // Flushes it if anything was written since the last flush. Returns a Win32
-// error code.
+// error code. The caller holds g_cs.
+static DWORD FlushLocked(void)
+{
+    if (!g_ds.flushPending)
+        return ERROR_SUCCESS;
+    g_ds.flushPending = 0;
+    g_ds.flushesDone++;
+    if (IpodAta_Flush() != IPODATA_OK)
+    {
+        g_ds.flushPending = 1;              // try again next time
+        g_ds.flushErrors++;
+        return ERROR_WRITE_FAULT;
+    }
+    return ERROR_SUCCESS;
+}
+
 static DWORD DoFlush(void)
 {
-    DWORD status = ERROR_SUCCESS;
+    DWORD status;
 
     EnterCriticalSection(&g_cs);
-    if (g_ds.flushPending)
-    {
-        g_ds.flushPending = 0;
-        g_ds.flushesDone++;
-        if (IpodAta_Flush() != IPODATA_OK)
-        {
-            g_ds.flushPending = 1;          // try again next time
-            g_ds.flushErrors++;
-            status = ERROR_WRITE_FAULT;
-        }
-    }
+    status = FlushLocked();
     LeaveCriticalSection(&g_cs);
     return status;
 }
 
-// Flushes FLUSH_DELAY_MS after the last write, so the cache is not left
-// full while nothing else happens.
-static DWORD WINAPI FlushThread(LPVOID pArg)
+// Spins the disk down if it has still not been used for g_idleMs (checked
+// under the lock, so a transfer that just started wins). The cache is
+// flushed first; STANDBY IMMEDIATE would write it back too, but this keeps
+// the flush counters honest.
+static void DoStandby(void)
 {
-    DWORD idle;
+    EnterCriticalSection(&g_cs);
+    if (GetTickCount() - g_lastUseTick >= g_idleMs)
+    {
+        FlushLocked();
+        IpodAta_Standby();                  // counts and logs itself; a no-op in standby already
+    }
+    LeaveCriticalSection(&g_cs);
+}
+
+// Wakes after reads and writes and keeps two deadlines: the flush
+// FLUSH_DELAY_MS after the last write (so the cache is not left full while
+// nothing else happens), and the spin-down g_idleMs after the last read or
+// write. Then it waits for the next transfer.
+static DWORD WINAPI IdleThread(LPVOID pArg)
+{
+    DWORD now, since, wait;
 
     UNREFERENCED_PARAMETER(pArg);
     for (;;)
     {
-        WaitForSingleObject(g_hWritten, INFINITE);
+        WaitForSingleObject(g_hActivity, INFINITE);
         for (;;)
         {
-            idle = GetTickCount() - g_lastWriteTick;
-            if (idle >= FLUSH_DELAY_MS)
+            now = GetTickCount();
+            wait = INFINITE;
+            if (g_ds.flushPending)
+            {
+                since = now - g_lastWriteTick;
+                if (since < FLUSH_DELAY_MS)
+                    wait = FLUSH_DELAY_MS - since;
+                else if (DoFlush() != ERROR_SUCCESS)
+                    wait = FLUSH_DELAY_MS;  // again later
+            }
+            if (g_idleMs != 0)
+            {
+                since = now - g_lastUseTick;
+                if (since < g_idleMs)
+                {
+                    if (g_idleMs - since < wait)
+                        wait = g_idleMs - since;
+                }
+                else
+                {
+                    DoStandby();            // then nothing until the next read or write
+                }
+            }
+            if (wait == INFINITE)
                 break;
-            Sleep(FLUSH_DELAY_MS - idle);
+            Sleep(wait);                    // a transfer meanwhile only moves the deadlines later
         }
-        DoFlush();
     }
 }
 
@@ -468,21 +520,25 @@ static BOOL Refuse(DWORD *pCounter, DWORD error)
 DWORD DSK_Init(LPCTSTR pContext, DWORD dwBusContext)
 {
     HKEY hKey;
-    DWORD useDma, sysIntr, allowWrite;
+    DWORD useDma, sysIntr, allowWrite, idleS;
     IPODATA_STATUS st;
-    HANDLE hThread;
+    HANDLE hThread = NULL;
 
     UNREFERENCED_PARAMETER(dwBusContext);
 
     // the driver's own registry key: "UseDma" 0 = PIO only (default 1);
     // "SysIntr" for DMA completion (default SYSINTR_ATA), 0 = polled;
-    // "AllowWrite" 1 = writes reach the disk (default 0: read only)
+    // "AllowWrite" 1 = writes reach the disk (default 0: read only);
+    // "IdleTimeout" seconds unused before the disk spins down (default 30, 0 = never)
     hKey = OpenDeviceKey(pContext);
     useDma = RegDword(hKey, L"UseDma", 1);
     sysIntr = RegDword(hKey, L"SysIntr", SYSINTR_ATA);
     allowWrite = RegDword(hKey, L"AllowWrite", 0);
+    idleS = RegDword(hKey, L"IdleTimeout", 30);
     if (hKey != NULL)
         RegCloseKey(hKey);
+    if (idleS > 24 * 3600)
+        idleS = 24 * 3600;
 
     InitializeCriticalSection(&g_cs);
     memset(&g_ds, 0, sizeof(g_ds));
@@ -495,21 +551,30 @@ DWORD DSK_Init(LPCTSTR pContext, DWORD dwBusContext)
     if (st.dmaMode != IPODATA_MODE_PIO && sysIntr != 0)
         IpodAta_UseInterrupt(sysIntr);
 
-    // writing: only with the flush thread running, so the cache is not left unflushed
+    // The idle thread flushes after writes and spins the disk down when
+    // unused. Writing only with it running, so the cache is not left
+    // unflushed; no spin-down without it.
     g_allowWrite = FALSE;
-    if (allowWrite == 1 && g_ds.ready)
+    g_idleMs = 0;
+    if (g_ds.ready && (allowWrite == 1 || idleS != 0))
     {
-        g_hWritten = CreateEvent(NULL, FALSE, FALSE, NULL);
-        hThread = (g_hWritten != NULL) ? CreateThread(NULL, 0, FlushThread, NULL, 0, NULL) : NULL;
+        g_hActivity = CreateEvent(NULL, FALSE, FALSE, NULL);
+        if (g_hActivity != NULL)
+            hThread = CreateThread(NULL, 0, IdleThread, NULL, CREATE_SUSPENDED, NULL);
         if (hThread != NULL)
         {
+            g_allowWrite = (allowWrite == 1);
+            g_idleMs = idleS * 1000;
+            g_lastUseTick = GetTickCount();
+            ResumeThread(hThread);
             CloseHandle(hThread);
-            g_allowWrite = TRUE;
         }
     }
     g_ds.allowWrite = g_allowWrite ? 1 : 0;
-    RETAILMSG(1, (L"ipoddsk: writing %s (registry AllowWrite %u)\r\n",
-                  g_allowWrite ? L"ALLOWED" : L"off, read only", allowWrite));
+    g_ds.idleTimeout = g_idleMs / 1000;
+    RETAILMSG(1, (L"ipoddsk: writing %s (registry AllowWrite %u); spin down after %u s unused%s\r\n",
+                  g_allowWrite ? L"ALLOWED" : L"off, read only", allowWrite, g_idleMs / 1000,
+                  g_idleMs ? L"" : L" (never)"));
     return 1;                   // stay loaded in any case, so the panel can say what is wrong
 }
 

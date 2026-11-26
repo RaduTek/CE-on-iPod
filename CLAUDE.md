@@ -159,7 +159,12 @@ display, HDD, PMU/backlight, clickwheel, audio.
 - 2026-11-26: **Disk writes verified** (128 GB iFlash, registry `AllowWrite` 1): Write test 4 MB
   OK, 11428 KB/s write, flush (E7) 3 ms, 10255 KB/s read back. With `AllowWrite` 0 the driver
   refuses write opens (`o 2`) and creating a file fails with error 5. Repo default stays 0.
-  Not yet checked: flush thread (2 s after last write), Rockbox/PC reading the volume afterwards.
+  Flush thread verified (sent 2, pend 0 after the write test). Not yet checked: Rockbox/PC
+  reading the volume afterwards.
+- 2026-11-26: **Spin-down when idle verified** (level 1): registry `IdleTimeout` (image: 10 s) ->
+  flush + STANDBY IMMEDIATE; HDD 268 ms, iFlash 10 ms; the next access spins up (user-observed on
+  the HDD; the spin-up log line was not captured). The iFlash still gets warm in standby: next
+  is level 2, power off as Rockbox's `ata_power_down()` (PMU reg 0x1B, pins, clock).
 
 ## Display driver (src/drivers/ipodlcd) - test pattern verified on hardware 2026-11-19
 - `ipodlcd.dll`, GPE flat driver (structure from CEonPi raspiBasic_ddi), loaded by GWES (SHMK).
