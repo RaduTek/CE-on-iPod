@@ -59,8 +59,11 @@ the click wheel in particular will need their own set-up there (see each
 ## Disk, read only: `ipoddsk.dll` (`src\drivers\ipoddsk`)
 
 - `DSK1:`, a block device for the storage manager, on top of `ipodata.c`:
-  the S5L8702's ATA controller in PIO mode, IDENTIFY and READ SECTORS only.
-  About 1.9 MB/s raw, 1.8 MB/s through the file system (iFlash).
+  the S5L8702's ATA controller, reads by DMA (the controller's own bus master,
+  fastest UDMA/MWDMA mode the disk offers, completion polled; registry
+  `UseDma` 0 = PIO only; a failed DMA read is reset and redone in PIO).
+  PIO: about 1.9 MB/s raw, 1.8 MB/s through the file system (iFlash).
+  DMA: not measured yet (2026-11-26).
 - Read only twice over: `ipodata.c` has no write command at all, and every
   write, format and delete request is refused before it is called. The
   storage manager is told the store is read only (`Attrib` 1), so programs
@@ -83,7 +86,8 @@ the click wheel in particular will need their own set-up there (see each
   enabled (Rockbox has just read the image from it). PATA only: a CE-ATA
   disk (later models) is refused with its own error code (written from
   Rockbox's sources; no CE-ATA iPod was at hand to try).
-- **Does not:** reset, power or configure the disk; no DMA; no sleep.
+- **Does not:** power the disk; it sends only the transfer mode (SET
+  FEATURES 0x03) and a software reset after a failed DMA read; no sleep.
 - **Check:** "iPod disk" on the desktop (the volume found, reads and
   refused writes, the last error and the step it happened at, the stores
   Windows lists; "Verify file" reads `\iPod\wince.ipod` to its end and

@@ -1,15 +1,29 @@
 //
-// ipodata.c - reading the iPod's disk under Windows CE (ATA, PIO, read only)
+// ipodata.c - reading the iPod's disk under Windows CE (ATA, PIO or DMA, read only)
 //
 // The disk controller of the S5L8702 as Rockbox drives it (Rockbox
 // firmware/target/arm/s5l8702/ipod6g/storage_ata-6g.c, the part that is not
 // CE-ATA). Rockbox has just loaded Windows CE from this disk, so the disk is
 // powered, its pins are set up and the controller is enabled; none of that
-// is redone here. No reset, no power switching, no settings sent to the disk.
+// is redone here. No power switching. The only setting sent to the disk is
+// its transfer mode (for DMA), and it is reset only after a failed DMA read.
 //
 // READ ONLY BY CONSTRUCTION: the only commands this file can send to the
-// disk are IDENTIFY DEVICE (0xEC), READ SECTORS (0x20) and READ SECTORS EXT
-// (0x24). There is no write function and no way to pass a command in.
+// disk are IDENTIFY DEVICE (0xEC), READ SECTORS (0x20), READ SECTORS EXT
+// (0x24), READ DMA (0xC8), READ DMA EXT (0x25) and SET FEATURES (0xEF) with
+// subcommand 0x03 (transfer mode) only; plus a software reset through the
+// device control register after a failed DMA read. There is no write
+// function and no way to pass a command in.
+//
+// DMA. The controller is a bus master of its own (not the PL080s): it is
+// given the physical address and size of a buffer, moves the data itself
+// and then sets bit 0 of ATA_IRQ. The buffer here is 64 KB of uncached,
+// physically contiguous memory; data is copied out of it. The mode (UDMA
+// up to 4, else multiword DMA up to 2) and the controller's timing for it
+// follow Rockbox's ata_power_up(); its timing values are HClk cycles worked
+// out for 108 MHz, so at a slower clock they only get longer. Completion is
+// polled (ATA_IRQ bit 0); the ATA interrupt stays masked in the VIC. A DMA
+// read that fails resets the disk and is done again in PIO.
 //
 // Every register of the disk itself is reached through the controller: a
 // write when the controller says it can take one, and for a read a dummy
@@ -40,7 +54,12 @@
 #define ATA_IRQ             0x10
 #define ATA_IRQ_MASK        0x14
 #define ATA_CFG             0x18
+#define ATA_MDMA_TIME       0x28
 #define ATA_PIO_TIME        0x2C
+#define ATA_UDMA_TIME       0x30
+#define ATA_XFR_NUM         0x34        // bytes to move, minus 1
+#define ATA_TBUF_START      0x3C        // where a read puts the data (physical)
+#define ATA_TBUF_SIZE       0x40
 #define ATA_PIO_DTR         0x54        // the disk's data register
 #define ATA_PIO_FED         0x58        // error
 #define ATA_PIO_SCR         0x5C        // sector count
@@ -53,12 +72,27 @@
 #define ATA_PIO_READY       0x78        // bit 1: a register access may start; bit 0: read data is there
 #define ATA_PIO_RDATA       0x7C
 
+#define ATA_COMMAND_START   (1 << 0)
 #define ATA_COMMAND_STOP    (1 << 1)
 #define ATA_CFG_PIO         (1 << 6)    // the configuration Rockbox reads the identify data in
+#define ATA_CFG_WRITE       (1 << 4)    // DMA direction: 1 = to the disk
+#define ATA_CFG_CLEAR_START ((1 << 7) | (1 << 8))               // cleared when a DMA transfer starts
+#define ATA_CFG_CLEAR_END   ((1 << 2) | (1 << 3) | (1 << 12))   // cleared when it ends
+#define ATA_CFG_UDMA        ((1 << 2) | (1 << 3) | (1 << 9) | (1 << 10))
+#define ATA_CFG_MWDMA       ((1 << 3) | (1 << 10))
+#define ATA_IRQ_XFER_DONE   (1 << 0)
+#define ATA_IRQ_ALL         0x1F
+
+#define DAD_NIEN            (1 << 1)    // device control: no interrupts from the disk
+#define DAD_SRST            (1 << 2)    // device control: software reset
 
 #define CMD_READ_SECTORS        0x20
 #define CMD_READ_SECTORS_EXT    0x24
+#define CMD_READ_DMA_EXT        0x25
+#define CMD_READ_DMA            0xC8
 #define CMD_IDENTIFY            0xEC
+#define CMD_SET_FEATURES        0xEF
+#define FEATURE_TRANSFER_MODE   0x03
 
 #define ST_ERR              0x01
 #define ST_DRQ              0x08
@@ -70,6 +104,9 @@
 #define SPIN_LOOPS          50          // short waits are spun, longer ones sleep
 #define IDENTIFY_WAIT_MS    5000
 #define READ_WAIT_MS        2000
+#define DMA_WAIT_MS         2000
+#define RESET_WAIT_MS       5000
+#define DMA_BUF_BYTES       (IPODATA_MAX_SECTORS * IPODATA_SECTOR_BYTES)
 
 // The PC test redirects these into its model of the controller and the disk.
 #ifndef ATA_RD
@@ -83,6 +120,12 @@ static volatile UINT32 *g_pAta = NULL, *g_pClk = NULL, *g_pGpio = NULL;
 
 static IPODATA_STATUS g_st;
 static WORD g_ident[256];
+static BYTE *g_pDmaBuf = NULL;          // DMA_BUF_BYTES, uncached; physical address in g_st.dmaBufPhys
+static DWORD g_dmaCfg = 0;              // ATA_CFG bits for the chosen DMA mode, 0 = PIO
+
+// The controller's timing register for each mode (Rockbox, S5L8702, HClk 108 MHz).
+static const DWORD g_udmaTime[5] = { 0x4071152, 0x2050D52, 0x2030A52, 0x1020A52, 0x1010A52 };
+static const DWORD g_mdmaTime[3] = { 0x1C175, 0x7083, 0x5072 };
 
 //------------------------------------------------------------------------------
 // one access to a register of the disk
@@ -279,7 +322,21 @@ BOOL IpodAta_Init(void)
         g_st.bootPioTime = ATA_RD(ATA_PIO_TIME);
         g_st.bootIrq = ATA_RD(ATA_IRQ);
         g_st.bootIrqMask = ATA_RD(ATA_IRQ_MASK);
+        g_st.bootMdmaTime = ATA_RD(ATA_MDMA_TIME);
+        g_st.bootUdmaTime = ATA_RD(ATA_UDMA_TIME);
     }
+
+#ifdef IPODATA_MAP_REGISTERS
+    {
+        ULONG phys = 0;
+
+        g_pDmaBuf = (BYTE *)AllocPhysMem(DMA_BUF_BYTES, PAGE_READWRITE | PAGE_NOCACHE, 0, 0, &phys);
+        if (g_pDmaBuf != NULL)
+            g_st.dmaBufPhys = phys;
+        else
+            RETAILMSG(1, (L"ipodata: no DMA buffer (error %u): reads stay PIO\r\n", GetLastError()));
+    }
+#endif
     RETAILMSG(1, (L"ipodata: disk pins %08x %08x %08x %04x, controller %x, cfg %x\r\n",
                   g_st.bootPcon7, g_st.bootPcon8, g_st.bootPcon9, g_st.bootPcon10,
                   g_st.bootControl, g_st.bootCfg));
@@ -306,7 +363,104 @@ static void IdentString(char *pOut, int firstWord, int words)
     }
 }
 
-DWORD IpodAta_Attach(void)
+//------------------------------------------------------------------------------
+// the transfer mode
+//
+// The highest mode up to max whose bit is set; -1 = none.
+static int BestMode(DWORD bits, int max)
+{
+    int n;
+
+    for (n = max; n >= 0; n--)
+    {
+        if (bits & (1u << n))
+            return n;
+    }
+    return -1;
+}
+
+static DWORD SetTransferMode(DWORD mode)
+{
+    DWORD rc, v;
+
+    rc = WaitReadyForCommand(IDENTIFY_WAIT_MS);
+    if (rc != IPODATA_OK)
+        return rc;
+    if (!DiskWrite(ATA_PIO_DVR, 0) || !DiskWrite(ATA_PIO_FED, FEATURE_TRANSFER_MODE)
+        || !DiskWrite(ATA_PIO_SCR, mode) || !DiskWrite(ATA_PIO_CSD, CMD_SET_FEATURES))
+        return IPODATA_E_HANDSHAKE;
+    rc = WaitNotBusy(IDENTIFY_WAIT_MS);
+    if (rc != IPODATA_OK)
+        return rc;
+    if (!DiskRead(ATA_PIO_DAD, &v))
+        return IPODATA_E_HANDSHAKE;
+    g_st.lastStatus = v & 0xFF;
+    if (v & ST_ERR)
+        return NoteDeviceError();
+    return IPODATA_OK;
+}
+
+// Picks the fastest DMA mode the disk offers (Rockbox's rules), sets the
+// controller's timing and tells the disk. Leaves PIO in place when there is
+// none or the disk refuses.
+static void SetupDma(void)
+{
+    DWORD mode = IPODATA_MODE_PIO, cfg = 0, rc;
+    int n, max;
+
+    g_st.dmaMode = IPODATA_MODE_PIO;
+    g_st.modeError = 0;
+    g_dmaCfg = 0;
+    if (!g_st.dmaWanted || g_pDmaBuf == NULL)
+        return;
+
+    if ((g_ident[53] & (1 << 2)) && (g_ident[88] & 0x1F))
+    {
+        // above UDMA 2 only on an 80-wire bus (word 93 bit 13; word 76 = 0 is PATA)
+        max = (g_ident[76] == 0 && !(g_ident[93] & (1 << 13))) ? 2 : 4;
+        n = BestMode(g_ident[88], max);
+        if (n >= 0)
+        {
+            mode = IPODATA_MODE_UDMA(n);
+            cfg = ATA_CFG_UDMA;
+            ATA_WR(ATA_UDMA_TIME, g_udmaTime[n]);
+        }
+    }
+    if (mode == IPODATA_MODE_PIO && (g_ident[63] & 0x07))
+    {
+        n = BestMode(g_ident[63], 2);
+        mode = IPODATA_MODE_MWDMA(n);
+        cfg = ATA_CFG_MWDMA;
+        ATA_WR(ATA_MDMA_TIME, g_mdmaTime[n]);
+    }
+    if (mode == IPODATA_MODE_PIO)
+        return;
+
+    rc = SetTransferMode(mode);
+    if (rc != IPODATA_OK)
+    {
+        g_st.modeError = rc;
+        RETAILMSG(1, (L"ipodata: SET FEATURES mode %02x failed (code %u, status %02x, error %02x): PIO\r\n",
+                      mode, rc, g_st.lastStatus, g_st.lastError));
+        return;
+    }
+    g_st.dmaMode = mode;
+    g_dmaCfg = cfg;
+}
+
+// After a failed transfer: the disk's software reset, then wait for it. The
+// transfer mode set before stays (a reset does not undo SET FEATURES unless
+// the disk was told to revert to its defaults, which nothing here does).
+static void SoftReset(void)
+{
+    DiskWrite(ATA_PIO_DAD, DAD_NIEN | DAD_SRST);
+    Sleep(1);
+    DiskWrite(ATA_PIO_DAD, 0);
+    Sleep(2);
+    WaitReadyForCommand(RESET_WAIT_MS);
+}
+
+DWORD IpodAta_Attach(BOOL useDma)
 {
     DWORD rc, total;
 
@@ -352,6 +506,9 @@ DWORD IpodAta_Attach(void)
     g_st.word83 = g_ident[83];
     g_st.word88 = g_ident[88];
     g_st.word106 = g_ident[106];
+    g_st.word53 = g_ident[53];
+    g_st.word63 = g_ident[63];
+    g_st.word93 = g_ident[93];
 
     // size and addressing, by Rockbox's rules
     total = ((DWORD)g_ident[61] << 16) | g_ident[60];
@@ -373,13 +530,133 @@ DWORD IpodAta_Attach(void)
         g_st.sectorBytes = 512;
 
     g_st.attached = 1;
+    g_st.dmaWanted = useDma ? 1 : 0;
+    SetupDma();
+    RETAILMSG(1, (L"ipodata: transfer mode %02x (%s), words 53 %04x 63 %04x 88 %04x 93 %04x\r\n",
+                  g_st.dmaMode, g_st.dmaMode ? L"DMA" : (useDma ? L"PIO, no DMA" : L"PIO, UseDma 0"),
+                  g_ident[53], g_ident[63], g_ident[88], g_ident[93]));
+    RETAILMSG(1, (L"ipodata: timing at boot MDMA %x UDMA %x, now MDMA %x UDMA %x, buffer at %08x\r\n",
+                  g_st.bootMdmaTime, g_st.bootUdmaTime, ATA_RD(ATA_MDMA_TIME), ATA_RD(ATA_UDMA_TIME),
+                  g_st.dmaBufPhys));
+    // a failed SET FEATURES does not fail the attach: reads stay PIO
+    g_st.lastStep = 0;
+    g_st.lastCode = IPODATA_OK;
+    return IPODATA_OK;
+}
+
+// The data of a READ DMA command that has been sent, into g_pDmaBuf.
+static DWORD DmaIn(DWORD bytes)
+{
+    DWORD start, loops = 0, done = 0, rc;
+
+    rc = WaitForData(READ_WAIT_MS);         // the disk is ready to move the data
+    if (rc != IPODATA_OK)
+        return rc;
+
+    ATA_WR(ATA_TBUF_START, g_st.dmaBufPhys);
+    ATA_WR(ATA_TBUF_SIZE, bytes);
+    ATA_WR(ATA_CFG, ATA_RD(ATA_CFG) & ~ATA_CFG_WRITE);
+    ATA_WR(ATA_XFR_NUM, bytes - 1);
+    ATA_WR(ATA_CFG, (ATA_RD(ATA_CFG) | g_dmaCfg) & ~ATA_CFG_CLEAR_START);
+    ATA_WR(ATA_IRQ, ATA_IRQ_ALL);
+    ATA_WR(ATA_IRQ_MASK, ATA_IRQ_XFER_DONE);
+    ATA_WR(ATA_COMMAND, ATA_COMMAND_START);
+
+    start = GetTickCount();
+    for (;;)
+    {
+        if (ATA_RD(ATA_IRQ) & ATA_IRQ_XFER_DONE)
+        {
+            done = 1;
+            break;
+        }
+        if (GetTickCount() - start >= DMA_WAIT_MS || loops >= DMA_WAIT_MS + SPIN_LOOPS)
+            break;
+        if (++loops > SPIN_LOOPS)
+            Sleep(1);
+    }
+
+    // stop and tidy up in every case
+    ATA_WR(ATA_COMMAND, ATA_COMMAND_STOP);
+    ATA_WR(ATA_CFG, ATA_RD(ATA_CFG) & ~ATA_CFG_CLEAR_END);
+    ATA_WR(ATA_IRQ_MASK, 0);
+    ATA_WR(ATA_IRQ, ATA_IRQ_ALL);
+    if (!done)
+    {
+        g_st.dmaTimeouts++;
+        return IPODATA_E_DMA_TIMEOUT;
+    }
+    return IPODATA_OK;
+}
+
+// One read command, by DMA or PIO. The caller has checked the request.
+static DWORD ReadOnce(DWORD lbaLow, DWORD lbaHigh, DWORD count, BYTE *pOut, BOOL dma)
+{
+    DWORD rc, i;
+    BOOL ok;
+
+    ATA_WR(ATA_COMMAND, ATA_COMMAND_STOP);          // as Rockbox does before every transfer
+
+    rc = WaitReadyForCommand(READ_WAIT_MS);
+    if (rc != IPODATA_OK)
+        return Fail(IPODATA_STEP_RD_READY, rc);
+
+    ok = DiskWrite(ATA_PIO_DVR, 0);
+    if (g_st.lba48)
+    {
+        // the "previous" half of each register first, then the current one
+        ok = ok && DiskWrite(ATA_PIO_SCR, 0);
+        ok = ok && DiskWrite(ATA_PIO_SCR, count & 0xFF);
+        ok = ok && DiskWrite(ATA_PIO_LHR, (lbaHigh >> 8) & 0xFF);
+        ok = ok && DiskWrite(ATA_PIO_LMR, lbaHigh & 0xFF);
+        ok = ok && DiskWrite(ATA_PIO_LLR, (lbaLow >> 24) & 0xFF);
+        ok = ok && DiskWrite(ATA_PIO_LHR, (lbaLow >> 16) & 0xFF);
+        ok = ok && DiskWrite(ATA_PIO_LMR, (lbaLow >> 8) & 0xFF);
+        ok = ok && DiskWrite(ATA_PIO_LLR, lbaLow & 0xFF);
+        ok = ok && DiskWrite(ATA_PIO_DVR, 1 << 6);
+        ok = ok && DiskWrite(ATA_PIO_CSD, dma ? CMD_READ_DMA_EXT : CMD_READ_SECTORS_EXT);
+    }
+    else
+    {
+        ok = ok && DiskWrite(ATA_PIO_SCR, count & 0xFF);
+        ok = ok && DiskWrite(ATA_PIO_LHR, (lbaLow >> 16) & 0xFF);
+        ok = ok && DiskWrite(ATA_PIO_LMR, (lbaLow >> 8) & 0xFF);
+        ok = ok && DiskWrite(ATA_PIO_LLR, lbaLow & 0xFF);
+        ok = ok && DiskWrite(ATA_PIO_DVR, (1 << 6) | ((lbaLow >> 24) & 0x0F));
+        ok = ok && DiskWrite(ATA_PIO_CSD, dma ? CMD_READ_DMA : CMD_READ_SECTORS);
+    }
+    if (!ok)
+        return Fail(IPODATA_STEP_RD_CMD, IPODATA_E_HANDSHAKE);
+
+    if (dma)
+    {
+        rc = DmaIn(count * IPODATA_SECTOR_BYTES);
+        if (rc != IPODATA_OK)
+            return Fail(IPODATA_STEP_RD_DMA, rc);
+    }
+    else
+    {
+        for (i = 0; i < count; i++)
+        {
+            rc = WaitForData(READ_WAIT_MS);
+            if (rc != IPODATA_OK)
+                return Fail(IPODATA_STEP_RD_DATA, rc);
+            if (!TakeWords(pOut + i * IPODATA_SECTOR_BYTES, IPODATA_SECTOR_BYTES / 2))
+                return Fail(IPODATA_STEP_RD_DATA, IPODATA_E_HANDSHAKE);
+        }
+    }
+    rc = WaitForEnd(READ_WAIT_MS);
+    if (rc != IPODATA_OK)
+        return Fail(IPODATA_STEP_RD_END, rc);
+
+    if (dma)
+        memcpy(pOut, g_pDmaBuf, count * IPODATA_SECTOR_BYTES);
     return IPODATA_OK;
 }
 
 DWORD IpodAta_Read(DWORD lbaLow, DWORD lbaHigh, DWORD count, BYTE *pOut)
 {
-    DWORD rc, i, t0, endLow, endHigh;
-    BOOL ok;
+    DWORD rc, t0, endLow, endHigh;
 
     g_st.lastStep = 0;
     g_st.lastCode = IPODATA_OK;
@@ -407,52 +684,31 @@ DWORD IpodAta_Read(DWORD lbaLow, DWORD lbaHigh, DWORD count, BYTE *pOut)
 
     t0 = GetTickCount();
     g_st.reads++;
-    ATA_WR(ATA_COMMAND, ATA_COMMAND_STOP);          // as Rockbox does before every transfer
-
-    rc = WaitReadyForCommand(READ_WAIT_MS);
-    if (rc != IPODATA_OK)
-        return Fail(IPODATA_STEP_RD_READY, rc);
-
-    ok = DiskWrite(ATA_PIO_DVR, 0);
-    if (g_st.lba48)
+    if (g_st.dmaMode != IPODATA_MODE_PIO)
     {
-        // the "previous" half of each register first, then the current one
-        ok = ok && DiskWrite(ATA_PIO_SCR, 0);
-        ok = ok && DiskWrite(ATA_PIO_SCR, count & 0xFF);
-        ok = ok && DiskWrite(ATA_PIO_LHR, (lbaHigh >> 8) & 0xFF);
-        ok = ok && DiskWrite(ATA_PIO_LMR, lbaHigh & 0xFF);
-        ok = ok && DiskWrite(ATA_PIO_LLR, (lbaLow >> 24) & 0xFF);
-        ok = ok && DiskWrite(ATA_PIO_LHR, (lbaLow >> 16) & 0xFF);
-        ok = ok && DiskWrite(ATA_PIO_LMR, (lbaLow >> 8) & 0xFF);
-        ok = ok && DiskWrite(ATA_PIO_LLR, lbaLow & 0xFF);
-        ok = ok && DiskWrite(ATA_PIO_DVR, 1 << 6);
-        ok = ok && DiskWrite(ATA_PIO_CSD, CMD_READ_SECTORS_EXT);
+        rc = ReadOnce(lbaLow, lbaHigh, count, pOut, TRUE);
+        if (rc == IPODATA_OK)
+        {
+            g_st.dmaReads++;
+        }
+        else
+        {
+            // lastStep/lastCode keep the DMA failure for the panel unless the
+            // PIO read fails too; the disk is reset and the read done again
+            RETAILMSG(1, (L"ipodata: DMA read at %u+%u failed (step %u code %u status %02x error %02x), PIO again\r\n",
+                          lbaLow, count, g_st.lastStep, g_st.lastCode, g_st.lastStatus, g_st.lastError));
+            SoftReset();
+            rc = ReadOnce(lbaLow, lbaHigh, count, pOut, FALSE);
+        }
     }
     else
     {
-        ok = ok && DiskWrite(ATA_PIO_SCR, count & 0xFF);
-        ok = ok && DiskWrite(ATA_PIO_LHR, (lbaLow >> 16) & 0xFF);
-        ok = ok && DiskWrite(ATA_PIO_LMR, (lbaLow >> 8) & 0xFF);
-        ok = ok && DiskWrite(ATA_PIO_LLR, lbaLow & 0xFF);
-        ok = ok && DiskWrite(ATA_PIO_DVR, (1 << 6) | ((lbaLow >> 24) & 0x0F));
-        ok = ok && DiskWrite(ATA_PIO_CSD, CMD_READ_SECTORS);
+        rc = ReadOnce(lbaLow, lbaHigh, count, pOut, FALSE);
     }
-    if (!ok)
-        return Fail(IPODATA_STEP_RD_CMD, IPODATA_E_HANDSHAKE);
-
-    for (i = 0; i < count; i++)
-    {
-        rc = WaitForData(READ_WAIT_MS);
-        if (rc != IPODATA_OK)
-            return Fail(IPODATA_STEP_RD_DATA, rc);
-        if (!TakeWords(pOut + i * IPODATA_SECTOR_BYTES, IPODATA_SECTOR_BYTES / 2))
-            return Fail(IPODATA_STEP_RD_DATA, IPODATA_E_HANDSHAKE);
-        g_st.sectorsRead++;
-    }
-    rc = WaitForEnd(READ_WAIT_MS);
     if (rc != IPODATA_OK)
-        return Fail(IPODATA_STEP_RD_END, rc);
+        return rc;
 
+    g_st.sectorsRead += count;
     g_st.lastReadMs = GetTickCount() - t0;
     g_st.lastReadSectors = count;
     return IPODATA_OK;

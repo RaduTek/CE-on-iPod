@@ -12,7 +12,7 @@
 extern "C" {
 #endif
 
-#define IPODDSK_VERSION     2
+#define IPODDSK_VERSION     3       // 3: IPODATA_STATUS version 2 (DMA)
 #define IPODDSK_PROFILE     L"iPodDisk"     // System\StorageManager\Profiles\iPodDisk
 
 // where the look at the disk at start-up stopped (IPODDSK_STATUS.setupStep)

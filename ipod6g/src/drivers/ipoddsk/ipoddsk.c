@@ -33,6 +33,7 @@
 #include <winioctl.h>
 #include <ceddk.h>
 #include <pkfuncs.h>
+#include <devload.h>
 #include <diskio.h>
 #include <storemgr.h>
 
@@ -64,7 +65,18 @@ static BOOL ReadOne(DWORD lbaLow, DWORD lbaHigh, BYTE *pSector, void *pContext)
     return IpodAta_Read(lbaLow, lbaHigh, 1, pSector) == IPODATA_OK;
 }
 
-static void Setup(void)
+static DWORD RegDword(HKEY hKey, LPCWSTR pszName, DWORD dwDefault)
+{
+    DWORD v, type, size = sizeof(v);
+
+    if (hKey != NULL
+        && RegQueryValueEx(hKey, pszName, NULL, &type, (LPBYTE)&v, &size) == ERROR_SUCCESS
+        && type == REG_DWORD)
+        return v;
+    return dwDefault;
+}
+
+static void Setup(BOOL useDma)
 {
     static BYTE sector[IPODATA_SECTOR_BYTES];
     IPODATA_STATUS st;
@@ -78,7 +90,7 @@ static void Setup(void)
     g_shift = 0;
     g_base = 0;
 
-    if (IpodAta_Attach() != IPODATA_OK)
+    if (IpodAta_Attach(useDma) != IPODATA_OK)
     {
         g_ds.setupStep = IPODDSK_SETUP_IDENTIFY;
         return;
@@ -367,14 +379,22 @@ static BOOL Refuse(DWORD *pCounter, DWORD error)
 //
 DWORD DSK_Init(LPCTSTR pContext, DWORD dwBusContext)
 {
-    UNREFERENCED_PARAMETER(pContext);
+    HKEY hKey;
+    DWORD useDma;
+
     UNREFERENCED_PARAMETER(dwBusContext);
+
+    // the driver's own registry key: "UseDma" 0 = PIO only (default 1)
+    hKey = OpenDeviceKey(pContext);
+    useDma = RegDword(hKey, L"UseDma", 1);
+    if (hKey != NULL)
+        RegCloseKey(hKey);
 
     InitializeCriticalSection(&g_cs);
     memset(&g_ds, 0, sizeof(g_ds));
     g_ds.version = IPODDSK_VERSION;
     IpodAta_Init();
-    Setup();
+    Setup(useDma != 0);
     return 1;                   // stay loaded in any case, so the panel can say what is wrong
 }
 

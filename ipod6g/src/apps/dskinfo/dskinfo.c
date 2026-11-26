@@ -298,6 +298,11 @@ static void Paint(HDC hdc)
                  g_st.getInfos, g_st.deviceInfos, g_st.getNames, g_st.setInfos, g_st.initializeds,
                  g_st.flushes, g_st.others, g_st.lastOther);
         Line(hdc, &y, sz);
+        wsprintf(sz, L"transfer %s %u (asked %u, set err %u): DMA reads %u, timeouts %u",
+                 (g_st.ata.dmaMode & 0x40) ? L"UDMA" : (g_st.ata.dmaMode & 0x20) ? L"MWDMA" : L"PIO",
+                 g_st.ata.dmaMode & 0x0F, g_st.ata.dmaWanted, g_st.ata.modeError,
+                 g_st.ata.dmaReads, g_st.ata.dmaTimeouts);
+        Line(hdc, &y, sz);
         if (g_st.ata.errors || !g_st.ready)
         {
             wsprintf(sz, L"disk: step %u code %u status %02X error %02X, errors %u",

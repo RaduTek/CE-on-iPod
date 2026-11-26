@@ -11,9 +11,14 @@
 extern "C" {
 #endif
 
-#define IPODATA_VERSION         1
+#define IPODATA_VERSION         2
 #define IPODATA_SECTOR_BYTES    512
-#define IPODATA_MAX_SECTORS     64      // per read call
+#define IPODATA_MAX_SECTORS     128     // per read call (64 KB, the DMA buffer)
+
+// transfer modes (IPODATA_STATUS.dmaMode), as SET FEATURES 0x03 takes them
+#define IPODATA_MODE_PIO        0
+#define IPODATA_MODE_MWDMA(n)   (0x20 | (n))
+#define IPODATA_MODE_UDMA(n)    (0x40 | (n))
 
 // error codes (IPODATA_STATUS.lastCode); lastStep says where
 #define IPODATA_OK              0
@@ -32,6 +37,7 @@ extern "C" {
 #define IPODATA_E_SECTOR_SIZE   13      // sectors are not 512 bytes
 #define IPODATA_E_RANGE         14      // outside the disk, or too many sectors at once
 #define IPODATA_E_PARAM         15
+#define IPODATA_E_DMA_TIMEOUT   16      // the controller never said the DMA transfer was done
 
 // steps (IPODATA_STATUS.lastStep)
 #define IPODATA_STEP_CHECK      1       // looking at what Rockbox left
@@ -42,6 +48,7 @@ extern "C" {
 #define IPODATA_STEP_RD_CMD     6       // read: sending the command
 #define IPODATA_STEP_RD_DATA    7       // read: waiting for / taking the data
 #define IPODATA_STEP_RD_END     8       // read: after the last sector
+#define IPODATA_STEP_RD_DMA     10      // read: the DMA transfer
 
 typedef struct {
     DWORD   version;
@@ -59,6 +66,8 @@ typedef struct {
     DWORD   bootPioTime;
     DWORD   bootIrq;
     DWORD   bootIrqMask;
+    DWORD   bootMdmaTime;
+    DWORD   bootUdmaTime;
 
     // the last operation
     DWORD   attached;       // an identify succeeded
@@ -78,6 +87,15 @@ typedef struct {
     DWORD   word83;         // command sets
     DWORD   word88;         // UDMA modes
     DWORD   word106;        // sector size info
+    DWORD   word53;         // which of words 64-70 and 88 are valid
+    DWORD   word63;         // multiword DMA modes
+    DWORD   word93;         // cable (bit 13: 80-wire)
+
+    // the transfer mode
+    DWORD   dmaWanted;      // the caller asked for DMA (registry UseDma)
+    DWORD   dmaMode;        // IPODATA_MODE_...: what reads use
+    DWORD   dmaBufPhys;     // physical address of the DMA buffer, 0 = none
+    DWORD   modeError;      // SET FEATURES failed: IPODATA_E_... (then PIO)
 
     // counters
     DWORD   identifies;
@@ -86,6 +104,8 @@ typedef struct {
     DWORD   errors;
     DWORD   lastReadMs;     // duration of the last read call
     DWORD   lastReadSectors;
+    DWORD   dmaReads;       // reads done by DMA
+    DWORD   dmaTimeouts;
 
     // registers now
     DWORD   control;
@@ -99,8 +119,11 @@ typedef struct {
 BOOL  IpodAta_Init(void);
 
 // Puts the controller in the state Rockbox itself reads the disk's identity in
-// (two register writes, no reset) and asks the disk who it is. 0 = ok.
-DWORD IpodAta_Attach(void);
+// (two register writes, no reset) and asks the disk who it is. With useDma,
+// then picks the fastest DMA mode the disk offers, sets the controller's
+// timing for it and tells the disk (SET FEATURES); if any of that fails,
+// reads stay PIO. 0 = ok (identify worked).
+DWORD IpodAta_Attach(BOOL useDma);
 
 // Reads count sectors of 512 bytes. 0 = ok. There is no write function.
 DWORD IpodAta_Read(DWORD lbaLow, DWORD lbaHigh, DWORD count, BYTE *pOut);
