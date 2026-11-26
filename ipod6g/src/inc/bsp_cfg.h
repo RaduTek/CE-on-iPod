@@ -13,8 +13,9 @@ extern "C" {
 
 // SYSINTR_RESCHED (kernel defined) <-> S5L_IRQ_TIMER (timer B tick)
 #define SYSINTR_UART0           (SYSINTR_FIRMWARE+0)    // S5L_IRQ_UART0
+#define SYSINTR_AUDIO           (SYSINTR_FIRMWARE+1)    // S5L_IRQ_DMAC0 (= 17, sound driver)
 
-#define SYSINTR_ENDOFSTATIC     (SYSINTR_FIRMWARE+0)
+#define SYSINTR_ENDOFSTATIC     (SYSINTR_FIRMWARE+1)
 
 #if __cplusplus
 }

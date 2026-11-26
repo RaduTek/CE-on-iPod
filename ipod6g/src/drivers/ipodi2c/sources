@@ -1,0 +1,18 @@
+!if 0
+ipodi2c.dll - the iPod's I2C bus 0 (power chip, codec): stream driver
+"I2C1:" with Microsoft's I2C interface (i2c.h). See ipodi2c.c.
+!endif
+
+TARGETNAME=ipodi2c
+TARGETTYPE=DYNLINK
+DLLENTRY=_DllMainCRTStartup
+DEFFILE=ipodi2c.def
+
+SOURCES= \
+    ipodi2c.c \
+    i2chw.c \
+
+TARGETLIBS= \
+    $(_COMMONSDKROOT)\lib\$(_CPUDEPPATH)\ceddk.lib \
+    $(_COMMONSDKROOT)\lib\$(_CPUDEPPATH)\coredll.lib \
+

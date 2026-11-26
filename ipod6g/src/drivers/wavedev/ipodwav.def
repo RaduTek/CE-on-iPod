@@ -1,5 +1,7 @@
 ;
-; ipodwav.def - exports of the iPod's sound driver (stream prefix WAV)
+; ipodwav.def - exports of the iPod's sound driver (stream prefix WAV).
+; The WAV_* entry points come from Microsoft's wave MDD (wavemdd.lib); the
+; PDD is wavepdd.cpp.
 ;
 LIBRARY IPODWAV
 
@@ -9,3 +11,5 @@ EXPORTS
     WAV_Open
     WAV_Close
     WAV_IOControl
+    WAV_PowerUp
+    WAV_PowerDown

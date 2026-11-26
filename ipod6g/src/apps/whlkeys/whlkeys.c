@@ -11,6 +11,17 @@
 //   play/pause       the keyboard key "play/pause"
 //   next, previous   the keyboard keys "next track", "previous track"
 //
+// Navigation mode (registry HKLM\Software\iPod\WheelKeys, "Navigation" = 1,
+// the image's default; 0 = the media keys above), for getting around
+// dialogs and programs without a keyboard:
+//
+//   next, previous   Tab, Shift+Tab (the next / previous control)
+//   play/pause       switches the wheel between Down/Up and Right/Left
+//                    (clockwise = Right); held for 0.6 s: closes the
+//                    window in front instead (WM_CLOSE; CE 7 ignores
+//                    Alt+F4, tried); never the desktop or the taskbar
+//   wheel, centre, MENU as above
+//
 // A program in front can ask for the wheel to be the volume instead (as an
 // iPod's "now playing" screen does):
 // then a turn sends the keyboard keys "volume up" (clockwise) and "volume
@@ -27,7 +38,11 @@
 
 #define LINE_H          13
 #define MENU_HOLD_MS    600
+#define PLAY_HOLD_MS    600
 #define WM_WHLKEYS_SHOW (WM_APP + 1)
+
+#define REG_KEY         L"Software\\iPod\\WheelKeys"
+#define REG_NAVIGATION  L"Navigation"
 
 static HWND   g_hWnd;
 static HFONT  g_hFont;
@@ -36,6 +51,10 @@ static HWND   g_modeWnd;                    // who asked for volume keys
 static DWORD  g_keys, g_steps, g_presses, g_reads, g_openErr;
 static BOOL   g_devOpen;
 static DWORD  g_lastVk;
+static BOOL   g_navigation;                 // navigation mode (registry)
+static volatile LONG g_sideways;            // navigation mode: the wheel is Right/Left
+static DWORD  g_closes, g_closeSkips;       // long play presses: windows closed, refused
+static WCHAR  g_lastClosed[40];             // class of the last window closed or refused
 
 static void Key(BYTE vk, BOOL down)
 {
@@ -53,6 +72,49 @@ static void Tap(BYTE vk)
     Key(vk, FALSE);
 }
 
+// vk with a modifier (Shift, Alt) held around it
+static void TapWith(BYTE modifier, BYTE vk)
+{
+    Key(modifier, TRUE);
+    Tap(vk);
+    Key(modifier, FALSE);
+}
+
+// Asks the window in front to close, as its close box would. Not the shell's
+// desktop or taskbar (closing those would end Explorer), nor nothing.
+static void CloseFront(void)
+{
+    HWND h = GetForegroundWindow();
+    WCHAR cls[40];
+
+    cls[0] = 0;
+    if (h != NULL)
+        GetClassName(h, cls, sizeof(cls) / sizeof(cls[0]));
+    wcscpy(g_lastClosed, cls[0] ? cls : L"(none)");
+
+    if (h == NULL || wcscmp(cls, L"DesktopExplorerWindow") == 0 || wcscmp(cls, L"HHTaskBar") == 0)
+    {
+        g_closeSkips++;
+        return;
+    }
+    PostMessage(h, WM_CLOSE, 0, 0);
+    g_closes++;
+}
+
+static DWORD RegDword(LPCWSTR pszName, DWORD dwDefault)
+{
+    HKEY hKey;
+    DWORD v, type, size = sizeof(v);
+
+    if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, REG_KEY, 0, 0, &hKey) != ERROR_SUCCESS)
+        return dwDefault;
+    if (RegQueryValueEx(hKey, pszName, NULL, &type, (LPBYTE)&v, &size) != ERROR_SUCCESS
+        || type != REG_DWORD)
+        v = dwDefault;
+    RegCloseKey(hKey);
+    return v;
+}
+
 // Volume keys from the wheel? Only while the window that asked for them is
 // there and in front: a program that closed, crashed or went to the back
 // must not leave the wheel useless for getting around.
@@ -67,8 +129,9 @@ static DWORD WINAPI ReaderThread(LPVOID pv)
 {
     HANDLE hDev = INVALID_HANDLE_VALUE;
     WHL_EVENT ev[16];
-    DWORD got, i, menuTick = 0;
+    DWORD got, i, menuTick = 0, playTick = 0;
     BOOL menuDown = FALSE, menuFired = FALSE, centreDown = FALSE;
+    BOOL playDown = FALSE, playFired = FALSE;
 
     UNREFERENCED_PARAMETER(pv);
 
@@ -99,6 +162,8 @@ static DWORD WINAPI ReaderThread(LPVOID pv)
                 g_steps++;
                 if (VolumeNow())
                     Tap((BYTE)(ev[i].a ? VK_VOLUME_UP : VK_VOLUME_DOWN));
+                else if (g_navigation && g_sideways)
+                    Tap((BYTE)(ev[i].a ? VK_RIGHT : VK_LEFT));
                 else
                     Tap((BYTE)(ev[i].a ? VK_DOWN : VK_UP));
             }
@@ -129,16 +194,42 @@ static DWORD WINAPI ReaderThread(LPVOID pv)
                     }
                     break;
                 case WHL_BTN_PLAY:
-                    if (ev[i].b)
-                        Tap(VK_MEDIA_PLAY_PAUSE);
+                    if (!g_navigation)
+                    {
+                        if (ev[i].b)
+                            Tap(VK_MEDIA_PLAY_PAUSE);
+                    }
+                    else if (ev[i].b)
+                    {
+                        playDown = TRUE;
+                        playFired = FALSE;
+                        playTick = GetTickCount();
+                    }
+                    else
+                    {
+                        // a short press (not held into a close): the wheel's other axis
+                        if (playDown && !playFired)
+                            g_sideways = !g_sideways;
+                        playDown = FALSE;
+                    }
                     break;
                 case WHL_BTN_NEXT:
                     if (ev[i].b)
-                        Tap(VK_MEDIA_NEXT_TRACK);
+                    {
+                        if (g_navigation)
+                            Tap(VK_TAB);
+                        else
+                            Tap(VK_MEDIA_NEXT_TRACK);
+                    }
                     break;
                 case WHL_BTN_PREVIOUS:
                     if (ev[i].b)
-                        Tap(VK_MEDIA_PREV_TRACK);
+                    {
+                        if (g_navigation)
+                            TapWith(VK_SHIFT, VK_TAB);
+                        else
+                            Tap(VK_MEDIA_PREV_TRACK);
+                    }
                     break;
                 }
             }
@@ -148,6 +239,12 @@ static DWORD WINAPI ReaderThread(LPVOID pv)
         {
             Tap(VK_LWIN);
             menuFired = TRUE;
+        }
+        // navigation mode, play held long enough: close the window in front, once
+        if (playDown && !playFired && GetTickCount() - playTick >= PLAY_HOLD_MS)
+        {
+            CloseFront();
+            playFired = TRUE;
         }
     }
 }
@@ -225,6 +322,15 @@ static void Paint(HDC hdc)
     Line(hdc, &y, VolumeNow() ? L"the wheel is the volume" :
                   g_volumeMode ? L"the wheel is the arrow keys (volume asked for, asker not in front)" :
                   L"the wheel is the arrow keys");
+    Line(hdc, &y, !g_navigation ? L"buttons: media keys (Navigation 0)" :
+                  g_sideways ? L"navigation: Tab keys, wheel Right/Left (play switches, hold: close)" :
+                  L"navigation: Tab keys, wheel Down/Up (play switches, hold: close)");
+    if (g_navigation)
+    {
+        wsprintf(sz, L"hold play: %u closed, %u refused, last %s",
+                 g_closes, g_closeSkips, g_lastClosed[0] ? g_lastClosed : L"-");
+        Line(hdc, &y, sz);
+    }
     SelectObject(hdc, hOld);
 }
 
@@ -311,6 +417,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     if (g_hWnd == NULL)
         return 1;
 
+    g_navigation = (RegDword(REG_NAVIGATION, 0) != 0);
     CloseHandle(CreateThread(NULL, 0, ReaderThread, NULL, 0, NULL));
 
     while (GetMessage(&msg, NULL, 0, 0))

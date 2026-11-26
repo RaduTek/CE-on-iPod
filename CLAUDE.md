@@ -16,8 +16,13 @@ display, HDD, PMU/backlight, clickwheel, audio.
   support installed) at `C:\WINCE700`. `ipod6g/` must appear as `C:\WINCE700\platform\ipod6g`.
   `iPodCE/` is the sample OS design.
 - The VM's `C:\WINCE700` is mapped on the host as `Z:` (read-only reference).
-- The user builds, copies `wince.ipod` to the root of the iPod disk, boots it holding PLAY and reports
-  results (serial log, KITL output, build logs).
+- The user builds, copies `wince.ipod` to the iPod disk and reports results (serial log, KITL
+  output, build logs). **Since 2026-11-26 the user tests by launching `wince.ipod` from Rockbox
+  (ROLO)**, which is easier and needs no custom bootloader. The PLAY start (custom bootloader,
+  docs/bootloader.md) must keep working but is not routinely tested. A ROLO start leaves hardware
+  that Rockbox set up (codec, I2S, wheel); the bootloader does not set up the codec/I2S. Drivers
+  should set up what they need rather than rely on either.
+- Rockbox source: `C:\dev\rockbox` (branch `ce-on-ipod-loadsize`), not `../rockbox/`.
 - After every change, say exactly what to build, what to expect, and which log lines or
   behaviour confirm success. Prefer small, separately testable changes.
 - Never claim hardware behaviour that has not been verified. State assumptions and say how to
@@ -107,6 +112,35 @@ display, HDD, PMU/backlight, clickwheel, audio.
   kernel's background IST for unknown IRQs; software-only, no hardware IRQ. intr.c now accepts
   all SYSINTRs below SYSINTR_FIRMWARE (except RESCHED) as no-ops. (Same message is unexplained
   in the CEonPi notes; this is its cause there too.)
+- 2026-11-26: **Shared I2C driver `ipodi2c.dll` (`I2C1:`, Microsoft i2c.h interface) verified**
+  from both ROLO and cold (PLAY) start: bus pins `33331222` both ways, the power chip's clock read
+  and battery measurement (writes to 0x52-0x54) work through it. battdrvr is now its client.
+- 2026-11-26: **cold start vs ROLO compared**: disk, LCD (same `LCD_CON 0x80100db0`), click wheel
+  (bootloader's `button_init` starts it), I2C, battery all work both ways. Only sound differs:
+  cold start gives `ipodwav: I2SCLKDIV is 0` and the driver does not load (the bootloader never
+  sets up the codec/I2S). `DEVICE!InitDeviceContent ... 'Notify', error code 2404` appears in
+  both (Microsoft's notify driver, not ours).
+- 2026-11-26: **Sound works from a cold start.** ipodpcm.c now sets up I2S, the codec clock and
+  reset, and Rockbox's CS42L55 register sequence through I2C1: on every start. Log on both
+  starts: `ipodwav: codec set up: version 0xe9, 33 registers, headphones 0x6c (-20 dB),
+  I2SCLKDIV was 272` (ROLO) / `was 0` (cold), then `ready, I2SCLKDIV 272 = 44118 Hz`. The codec
+  answers after reset on a cold start, so its supply is on without any power-chip change.
+  Load order I2C1: (0) -> battery (1) -> sound (2) confirmed in the log.
+- **Next (planned 2026-11-26): port the sound driver to Microsoft's wave MDD + our PDD** (CEonPi
+  model, drops `getms.ps1`). Full plan: `docs/audio-mdd-plan.md`.
+- 2026-11-26: **DMAC0 interrupt verified** (plan step 1, ROLO): `SYSINTR_AUDIO` (17) <-> IRQ 16,
+  16 x 256-frame DMA ring, test tone 168 interrupts in 1004 ms, 0 timeouts/errors. Rockbox leaves
+  a stale TC bit on DMAC0 channel 4 (its LCD DMA) after ROLO; ring start clears idle channels'
+  status. Synchronous RETAILMSG costs ~3 ms per 40 characters (114 kbaud): keep it out of
+  timing-critical paths.
+- 2026-11-26: **Sound on the wave MDD verified** (ROLO and cold): `ipodwav.dll` = `wavemdd.lib` +
+  `wavepdd.cpp` + `ipodpcm.c` (ring) + `pcmtone.c`; `getms.ps1` and the copied Microsoft sample
+  files are gone. Start-up sound, Sound check, Windows volume work, no underruns. Lesson: a
+  shared interrupt line left asserted by Rockbox/bootloader (DMAC0 ch 4, LCD DMA) stormed the
+  MDD's IST and stopped the boot; drivers must quiet shared sources before enabling an IRQ.
+  See docs/drivers.md "Sound".
+- 2026-11-26: **Windows' volume on the codec verified**: HPACTL/HPBCTL in 1 dB steps below
+  -20 dB over `I2C1:` (registry `CodecVolume` 1; 0 = scaled samples). The MDD plan is complete.
 
 ## Display driver (src/drivers/ipodlcd) - test pattern verified on hardware 2026-11-19
 - `ipodlcd.dll`, GPE flat driver (structure from CEonPi raspiBasic_ddi), loaded by GWES (SHMK).

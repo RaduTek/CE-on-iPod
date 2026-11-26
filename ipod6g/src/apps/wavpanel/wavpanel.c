@@ -2,8 +2,8 @@
 // wavpanel.c - the panel of the Windows CE sound driver (ipodwav.dll)
 //
 // "Tone" plays three seconds of a quiet tone through Windows' own wave API
-// (22050 Hz mono, so the driver's mixer has to convert it to the codec's
-// rate and to stereo). "Chime" lets Windows play its start-up sound file.
+// (22050 Hz mono, so Windows' software mixer has to convert it to the
+// driver's 44100 Hz stereo). "Chime" lets Windows play its start-up sound file.
 // The readout, refreshed twice a second, is what a photo of the screen has
 // to carry back: what Windows answered at each step, and what the driver's
 // hardware layer counted.
@@ -17,7 +17,7 @@
 #define IDC_TONE        101
 #define IDC_CHIME       102
 #define IDC_STOP        103
-#define LINE_H          13
+#define LINE_H          12              // 13 lines under the buttons fit the 240-pixel screen
 #define BTN_H           22
 
 #define TONE_RATE       22050
@@ -206,24 +206,43 @@ static void Paint(HDC hdc)
         SelectObject(hdc, hOld);
         return;
     }
-    wsprintf(sz, L"driver: %s (code %u)  %u Hz (divider %u)  page %u",
-             g_st.ready ? L"ready" : L"NOT READY", g_st.initRc, g_st.rate, g_st.clkDiv, g_st.pageFrames);
+    if (g_st.version != IPODPCM_VERSION)
+    {
+        wsprintf(sz, L"driver status version %u, this panel reads %u: rebuild both", g_st.version, IPODPCM_VERSION);
+        Line(hdc, &y, sz);
+        SelectObject(hdc, hOld);
+        return;
+    }
+    wsprintf(sz, L"driver: %s (code %u)  %u Hz (divider %u)  ring %u x %u",
+             g_st.ready ? L"ready" : L"NOT READY", g_st.initRc, g_st.rate, g_st.clkDiv,
+             g_st.blocks, g_st.blockFrames);
     Line(hdc, &y, sz);
-    wsprintf(sz, L"%s  starts %u  stops %u  start code %u",
-             g_st.running ? L"PLAYING" : L"idle", g_st.starts, g_st.stops, g_st.lastStartRc);
+    wsprintf(sz, L"%s  starts %u  stops %u  opens %u (%u Hz %u-bit %u ch)",
+             g_st.running ? L"PLAYING" : L"idle", g_st.starts, g_st.stops, g_st.opens,
+             g_st.openRate, g_st.openBits, g_st.openChannels);
     Line(hdc, &y, sz);
-    wsprintf(sz, L"pages %u  late %u  max gap %u ms  stalls %u", g_st.fills, g_st.lateFills, g_st.maxGapMs, g_st.stalls);
+    wsprintf(sz, L"interrupts %u  late %u  empty %u  spurious %u  max gap %u ms",
+             g_st.interrupts, g_st.late, g_st.zeroAcks, g_st.spurious, g_st.maxGapMs);
     Line(hdc, &y, sz);
-    wsprintf(sz, L"DMA errors %u  stuck %u  peak %u (run before: %u)",
-             g_st.dmaErrors, g_st.stuckWaits, g_st.peak, g_st.lastPeak);
+    wsprintf(sz, L"underruns %u  faults %u  DMA errors %u  stuck %u",
+             g_st.underruns, g_st.faults, g_st.dmaErrors, g_st.stuckWaits);
     Line(hdc, &y, sz);
-    wsprintf(sz, L"position %08X  buffer %08X", g_st.position, g_st.bufPhys);
+    wsprintf(sz, L"volume %08X on the %s: headphones %02X %02X, %u writes, %u failed",
+             g_st.volume, g_st.codecVolume ? L"codec" : L"samples",
+             g_st.hpReg & 0xFF, (g_st.hpReg >> 8) & 0xFF, g_st.volWrites, g_st.volErrors);
+    Line(hdc, &y, sz);
+    wsprintf(sz, L"peak %u (run before: %u)  read %u  write %u",
+             g_st.peak, g_st.lastPeak, g_st.readPos, g_st.writePos);
     Line(hdc, &y, sz);
     wsprintf(sz, L"I2S txcon %08X  com %X  status %08X", g_st.i2sTxCon, g_st.i2sTxCom, g_st.i2sStatus);
     Line(hdc, &y, sz);
-    wsprintf(sz, L"channel config %08X  control %08X  dma %X", g_st.chConfig, g_st.chControl, g_st.dmacConfig);
+    wsprintf(sz, L"ch config %08X  control %08X  src %08X  ring %08X  dma %X",
+             g_st.chConfig, g_st.chControl, g_st.position, g_st.bufPhys, g_st.dmacConfig);
     Line(hdc, &y, sz);
     wsprintf(sz, L"gates %08X %08X  clkcon3 %08X", g_st.pwrcon0, g_st.pwrcon1, g_st.clkcon3);
+    Line(hdc, &y, sz);
+    wsprintf(sz, L"codec: version %02X  %u writes  step %u reg %02X error %u",
+             g_st.codecVersion, g_st.codecWrites, g_st.codecStep, g_st.codecReg, g_st.codecError);
     Line(hdc, &y, sz);
 
     SelectObject(hdc, hOld);

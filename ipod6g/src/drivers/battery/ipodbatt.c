@@ -6,13 +6,15 @@
 // status every few seconds and serves Windows' power status functions.
 //
 // Both the battery measurement and the clock live in the iPod's power chip,
-// reached through ipodi2c.c (the power chip's bus layer):
-//   - at start-up the chip's clock is read once and given to Windows
-//     (SetLocalTime); Windows' clock then runs on the kernel's tick. The
-//     chip's clock is never set from here.
-//   - the battery voltage is measured the way Rockbox does it (the bus layer's
-//     one fixed write), at most every 20 seconds, and turned into a
-//     percentage with Rockbox's table for this iPod.
+// reached through the I2C driver "I2C1:" (src\drivers\ipodi2c) with
+// Microsoft's I2C functions (i2c.h):
+//   - once the bus can be opened (normally at start-up) the chip's clock is
+//     read once and given to Windows (SetLocalTime); Windows' clock then runs
+//     on the kernel's tick. The chip's clock is never set from here.
+//   - the battery voltage is measured the way Rockbox does it (three fixed
+//     bytes to registers 0x52 .. 0x54, the only writes this driver makes), at
+//     most every 20 seconds, and turned into a percentage with Rockbox's
+//     table for this iPod.
 //   - "external power" is the chip's charger status, "charging" the
 //     processor pin Rockbox uses for it.
 //
@@ -21,6 +23,7 @@
 #include <ceddk.h>
 #include <pkfuncs.h>
 #include <battimpl.h>
+#include <i2c.h>
 
 #include <ipodi2c.h>
 #include <ipodbatt.h>
@@ -29,9 +32,25 @@
 #define GPIO_PDAT11         0x164       // bit 4 clear = charging
 
 #define REG_MBCS1           0x4B        // bit 0: USB power there, bit 2: adapter there
+#define REG_ADCC3           0x52        // battery measurement settings, 0x52 .. 0x54
+#define REG_ADCC2           0x53
 #define REG_ADCS1           0x55
 #define REG_ADCS3           0x57
 #define REG_RTCSC           0x59        // .. 0x5F: second, minute, hour, weekday, day, month, year (BCD)
+
+// the battery measurement in Rockbox's terms: raw is 10 bits,
+// millivolts = raw * 2000 / 1023 + 2250
+#define RAW_TO_MV(raw)      ((raw) * 2000 / 1023 + 2250)
+
+// The battery measurement of the PCF5063x, as Rockbox starts it (pmu-6g.c
+// pmu_read_adc with the ADC_BATTERY channel of adc-6g.c):
+//   register 0x52 (ADCC3) = 0x00   no divider, no accessory switch
+//   register 0x53 (ADCC2) = 0x00   no ratio settings
+//   register 0x54 (ADCC1) = 0x15   battery minus 2.25 V, average of 4, 10 bits, start
+// The second write covers 0x53 and 0x54 in one transfer (the register
+// number counts up by itself).
+static const BYTE g_measure1[] = { 0x00 };          // at 0x52
+static const BYTE g_measure2[] = { 0x00, 0x15 };    // at 0x53
 
 #define MEASURE_EVERY_MS    20000
 #define MEASURE_POLLS       50
@@ -48,6 +67,8 @@ static BOOL  g_haveMv = FALSE, g_haveCharger = FALSE;
 static DWORD g_mv = 0, g_lastMeasureTick = 0;
 static BYTE  g_mbcs1 = 0;
 static IPODBATT_STATUS g_st;        // what this driver did, for the power panel
+static HANDLE g_hBus = INVALID_HANDLE_VALUE;    // "I2C1:", set to the power chip
+static BOOL  g_clockTried = FALSE;
 
 // Rockbox's table for this iPod: millivolts at 0, 10, ... 100 percent
 static const WORD g_levels[11] = { 3500, 3670, 3720, 3750, 3770, 3800, 3860, 3920, 3980, 4070, 4170 };
@@ -76,6 +97,43 @@ static BOOL Bcd(BYTE b, int max, WORD *pOut)
     return TRUE;
 }
 
+// The bus, opened on first use (g_cs held). The I2C driver loads first
+// (registry "Order"); if it is not there yet, the next call tries again.
+static BOOL OpenBus(void)
+{
+    HANDLE h;
+
+    if (g_hBus != INVALID_HANDLE_VALUE)
+        return TRUE;
+    h = I2cOpen(IPODI2C_DEVICE);
+    if (h == INVALID_HANDLE_VALUE)
+    {
+        if (g_st.busOpenFails++ == 0)
+            RETAILMSG(1, (L"ipodbatt: cannot open %s (error %u)\r\n", IPODI2C_DEVICE, GetLastError()));
+        return FALSE;
+    }
+    if (!I2cSetSlaveAddress(h, IPODI2C_ADDR_PMU))
+    {
+        RETAILMSG(1, (L"ipodbatt: %s refused the power chip's address (error %u)\r\n",
+                      IPODI2C_DEVICE, GetLastError()));
+        I2cClose(h);
+        g_st.busOpenFails++;
+        return FALSE;
+    }
+    g_hBus = h;
+    return TRUE;
+}
+
+static BOOL PmuRead(BYTE reg, BYTE *pOut, DWORD count)
+{
+    return OpenBus() && I2cRead(g_hBus, reg, pOut, count);
+}
+
+static BOOL PmuWrite(BYTE reg, const BYTE *pData, DWORD count)
+{
+    return OpenBus() && I2cWrite(g_hBus, reg, (LPBYTE)pData, count);
+}
+
 // The power chip's time, once, into Windows' clock.
 static void SetClockFromChip(void)
 {
@@ -83,7 +141,7 @@ static void SetClockFromChip(void)
     BYTE r[7];
     WORD year;
 
-    if (IpodI2c_Read(IPODI2C_PMU, REG_RTCSC, r, sizeof(r)) != IPODI2C_OK)
+    if (!PmuRead(REG_RTCSC, r, sizeof(r)))
     {
         RETAILMSG(1, (L"ipodbatt: the power chip's clock could not be read\r\n"));
         return;
@@ -133,7 +191,8 @@ static DWORD OwnIoControl(DWORD dwContext, DWORD Ioctl, PUCHAR pInBuf, DWORD InB
     if (pOutBuf == NULL || OutBufLen < sizeof(st))
         return ERROR_INVALID_PARAMETER;
     EnterCriticalSection(&g_cs);
-    IpodI2c_GetState(&g_st.bus);
+    if (g_hBus != INVALID_HANDLE_VALUE)
+        DeviceIoControl(g_hBus, IOCTL_IPODI2C_GET_STATE, NULL, 0, &g_st.bus, sizeof(g_st.bus), NULL, NULL);
     g_st.charging = (g_pGpio != NULL) && ((g_pGpio[GPIO_PDAT11 >> 2] & 0x10) == 0);
     st = g_st;
     LeaveCriticalSection(&g_cs);
@@ -156,11 +215,12 @@ static BOOL MeasureMv(DWORD *pMv)
     BYTE s3 = 0, s1 = 0;
     DWORD polls, raw;
 
-    if (IpodI2c_StartBatteryMeasurement() != IPODI2C_OK)
+    if (!PmuWrite(REG_ADCC3, g_measure1, sizeof(g_measure1))
+        || !PmuWrite(REG_ADCC2, g_measure2, sizeof(g_measure2)))
         return FALSE;
     for (polls = 0; polls < MEASURE_POLLS; polls++)
     {
-        if (IpodI2c_Read(IPODI2C_PMU, REG_ADCS3, &s3, 1) != IPODI2C_OK)
+        if (!PmuRead(REG_ADCS3, &s3, 1))
             return FALSE;
         if (s3 & 0x80)
             break;
@@ -168,10 +228,10 @@ static BOOL MeasureMv(DWORD *pMv)
     }
     if (!(s3 & 0x80))
         return FALSE;
-    if (IpodI2c_Read(IPODI2C_PMU, REG_ADCS1, &s1, 1) != IPODI2C_OK)
+    if (!PmuRead(REG_ADCS1, &s1, 1))
         return FALSE;
     raw = ((DWORD)s1 << 2) | (s3 & 3);
-    *pMv = PMUTEST_MV(raw);
+    *pMv = RAW_TO_MV(raw);
     return TRUE;
 }
 
@@ -186,11 +246,14 @@ BOOL WINAPI BatteryPDDInitialize(LPCTSTR pszRegistryContext)
     g_st.version = IPODBATT_VERSION;
     a.QuadPart = PA_GPIO;
     g_pGpio = (volatile UINT32 *)MmMapIoSpace(a, 0x1000, FALSE);
-    IpodI2c_Init();
     gpfnBatteryPddIOControl = OwnIoControl;
 
     EnterCriticalSection(&g_cs);
-    SetClockFromChip();
+    if (OpenBus())
+    {
+        g_clockTried = TRUE;
+        SetClockFromChip();
+    }
     LeaveCriticalSection(&g_cs);
     return TRUE;                // without a readable chip the status is "unknown", not a failure
 }
@@ -216,6 +279,11 @@ BOOL WINAPI BatteryPDDGetStatus(PSYSTEM_POWER_STATUS_EX2 pstatus, PBOOL pfBatter
 
     EnterCriticalSection(&g_cs);
     g_st.asked++;
+    if (!g_clockTried && OpenBus())     // the bus was not there at start-up
+    {
+        g_clockTried = TRUE;
+        SetClockFromChip();
+    }
     if (!g_haveMv || now - g_lastMeasureTick >= MEASURE_EVERY_MS)
     {
         g_lastMeasureTick = now;
@@ -235,7 +303,7 @@ BOOL WINAPI BatteryPDDGetStatus(PSYSTEM_POWER_STATUS_EX2 pstatus, PBOOL pfBatter
                 RETAILMSG(1, (L"ipodbatt: the battery measurement failed\r\n"));
             g_st.fails++;
         }
-        if (IpodI2c_Read(IPODI2C_PMU, REG_MBCS1, &m, 1) == IPODI2C_OK)
+        if (PmuRead(REG_MBCS1, &m, 1))
         {
             g_mbcs1 = m;
             g_haveCharger = TRUE;

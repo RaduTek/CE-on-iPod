@@ -1,7 +1,8 @@
 !if 0
 battdrvr.dll - the iPod's battery (and clock) driver: Microsoft's battery
 driver library with ipodbatt.c as its hardware half. The export list is
-Microsoft's (Init, Deinit, IOControl ... without a prefix).
+Microsoft's (Init, Deinit, IOControl ... without a prefix). The power chip
+is reached through the I2C driver "I2C1:" (src\drivers\ipodi2c).
 !endif
 
 TARGETNAME=battdrvr
@@ -11,7 +12,6 @@ DEFFILE=$(_COMMONOAKROOT)\inc\battdrvr.def
 
 SOURCES= \
     ipodbatt.c \
-    ipodi2c.c \
 
 SOURCELIBS= \
     $(_COMMONOAKROOT)\lib\$(_CPUINDPATH)\battdrvr_mdd.lib \

@@ -108,8 +108,11 @@ static void Paint(HDC hdc)
             wsprintf(sz, L"driver: asked %u, measured %u, failed %u, charger %02X, pin %s",
                      bs.asked, bs.measures, bs.fails, bs.mbcs1, bs.charging ? L"charging" : L"not charging");
             Line(hdc, &y, sz);
-            wsprintf(sz, L"bus: reads %u, errors %u, last failure step %u code %u",
-                     bs.bus.reads, bs.bus.errors, bs.bus.lastStep, bs.bus.lastCode);
+            wsprintf(sz, L"bus I2C1: reads %u, writes %u, errors %u, refused %u, open fails %u",
+                     bs.bus.reads, bs.bus.writes, bs.bus.errors, bs.bus.refused, bs.busOpenFails);
+            Line(hdc, &y, sz);
+            wsprintf(sz, L"  last failure: chip %02X reg %02X step %u code %u",
+                     bs.bus.lastChip, bs.bus.lastReg, bs.bus.lastStep, bs.bus.lastCode);
             Line(hdc, &y, sz);
         }
         if (h != INVALID_HANDLE_VALUE)

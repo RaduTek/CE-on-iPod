@@ -12,7 +12,7 @@
 extern "C" {
 #endif
 
-#define IPODBATT_VERSION    1
+#define IPODBATT_VERSION    2
 
 // DeviceIoControl on "BAT1:" with this code returns an IPODBATT_STATUS
 #define IOCTL_IPODBATT_GET_STATUS \
@@ -34,7 +34,8 @@ typedef struct {
     DWORD   percent;
     DWORD   mbcs1;          // the chip's charger status: bit 0 USB power, bit 2 adapter
     DWORD   charging;       // the charge pin
-    IPODI2C_STATE bus;      // the bus layer's own account
+    DWORD   busOpenFails;   // times "I2C1:" could not be opened
+    IPODI2C_STATE bus;      // the I2C driver's own account (IOCTL_IPODI2C_GET_STATE)
 } IPODBATT_STATUS;
 
 #ifdef __cplusplus

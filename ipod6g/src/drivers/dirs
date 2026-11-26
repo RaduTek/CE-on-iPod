@@ -5,5 +5,6 @@ DIRS=\
     ipodlcd \
     wavedev \
     ipoddsk \
+    ipodi2c \
     battery \
     ipodwhl \
