@@ -20,7 +20,8 @@
 // Not Microsoft's: which chips and registers may be reached is fixed in
 // g_allow below. Anything else is refused before the bus is touched
 // (ERROR_ACCESS_DENIED), so a wrong caller cannot write the power chip's
-// supply settings. IOCTL_IPODI2C_GET_STATE returns the driver's account.
+// supply settings; the one supply within reach is the disk's (0x1B, on or
+// off, for the disk driver). IOCTL_IPODI2C_GET_STATE returns the driver's account.
 //
 #include <windows.h>
 #include <winioctl.h>
@@ -33,22 +34,27 @@
 #define LOG_FAILURES        16          // failures and refusals written to the debug output
 
 // What may be reached. Reads: any register of a listed chip. Writes: only
-// registers wFirst .. wLast (a write covers reg .. reg + count - 1; the chips
-// count the register number up by themselves).
+// registers wFirst .. wLast of one of the chip's entries (a write covers
+// reg .. reg + count - 1; the chips count the register number up by
+// themselves), and only values up to valueMax.
 typedef struct {
     BYTE    chip;
     BYTE    wFirst;
     BYTE    wLast;
+    BYTE    valueMax;
     LPCWSTR name;
 } I2C_ALLOW;
 
 static const I2C_ALLOW g_allow[] = {
-    // PCF50635: ADCC3, ADCC2, ADCC1 only, the battery measurement Rockbox
-    // starts (pmu-6g.c pmu_read_adc). Its supply and charger settings stay
-    // out of reach.
-    { IPODI2C_ADDR_PMU,   0x52, 0x54, L"power chip" },
+    // PCF50635: ADCC3, ADCC2, ADCC1, the battery measurement Rockbox starts
+    // (pmu-6g.c pmu_read_adc).
+    { IPODI2C_ADDR_PMU,   0x52, 0x54, 0xFF, L"power chip" },
+    // PCF50635 0x1B: the disk's supply, 0 = off, 1 = on, nothing else
+    // (Rockbox pmu-6g.c pmu_hdd_power; the disk driver powers the disk off
+    // when it is unused). Every other supply and the charger stay out of reach.
+    { IPODI2C_ADDR_PMU,   0x1B, 0x1B, 0x01, L"power chip (disk supply)" },
     // CS42L55: all of it (Rockbox cs42l55.c writes 0x00 .. 0x3F).
-    { IPODI2C_ADDR_CODEC, 0x00, 0xFF, L"codec" },
+    { IPODI2C_ADDR_CODEC, 0x00, 0xFF, 0xFF, L"codec" },
 };
 
 // one per I2cOpen
@@ -63,16 +69,28 @@ static CRITICAL_SECTION g_cs;           // one transfer at a time, and g_st
 static IPODI2C_STATE g_st;
 static BOOL g_init = FALSE;
 
-static const I2C_ALLOW *FindChip(DWORD chip)
+// May this transfer happen? Reads: the chip is listed. Writes: one entry of
+// the chip covers every register written and allows every value.
+static BOOL Allowed(DWORD chip, DWORD reg, const BYTE *pData, DWORD count, BOOL fWrite)
 {
-    DWORD i;
+    DWORD i, j;
 
+    if (reg > 0xFF)
+        return FALSE;
     for (i = 0; i < sizeof(g_allow) / sizeof(g_allow[0]); i++)
     {
-        if (g_allow[i].chip == chip)
-            return &g_allow[i];
+        if (g_allow[i].chip != chip)
+            continue;
+        if (!fWrite)
+            return TRUE;
+        if (reg < g_allow[i].wFirst || reg + count - 1 > g_allow[i].wLast)
+            continue;
+        for (j = 0; j < count && pData[j] <= g_allow[i].valueMax; j++)
+            ;
+        if (j == count)
+            return TRUE;
     }
-    return NULL;
+    return FALSE;
 }
 
 static DWORD Win32Error(DWORD code)
@@ -115,7 +133,6 @@ static DWORD Account(BOOL fWrite, DWORD chip, DWORD reg, const I2CHW_FAIL *pFail
 static DWORD Transfer(I2C_OPEN *pOpen, BOOL fWrite, BYTE *pUser, DWORD count)
 {
     BYTE buf[IPODI2C_MAX_LENGTH];
-    const I2C_ALLOW *pAllow;
     I2CHW_FAIL fail;
     DWORD chip, reg, rc, err;
 
@@ -141,9 +158,7 @@ static DWORD Transfer(I2C_OPEN *pOpen, BOOL fWrite, BYTE *pUser, DWORD count)
 
     EnterCriticalSection(&g_cs);
     memset(&fail, 0, sizeof(fail));
-    pAllow = FindChip(chip);
-    if (reg > 0xFF || pAllow == NULL
-        || (fWrite && (reg < pAllow->wFirst || reg + count - 1 > pAllow->wLast)))
+    if (!Allowed(chip, reg, buf, count, fWrite))
     {
         fail.step = IPODI2C_STEP_CHECK;
         fail.code = IPODI2C_E_REFUSED;

@@ -92,6 +92,11 @@ ENDIF BSP_NODISPLAY !
     ; IMMEDIATE; it stays powered, the next access spins it up, which takes a
     ; few seconds). 0 = never, 0xA = 10s, 0x1E = 30 s.
     "IdleTimeout"=dword:A
+    ; 1 = after IdleTimeout switch the disk off altogether, as Rockbox does
+    ; (supply at the power chip, pins, controller); the next access powers
+    ; it up (a few seconds). Saves more than spinning down, notably on
+    ; flash adapters (iFlash) that stay warm in standby. 0 = spin down only.
+    "IdlePowerOff"=dword:1
 
 ; How the storage manager treats that disk: mount what is there under \iPod,
 ; never partition, never format. Read only or not is the driver's

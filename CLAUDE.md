@@ -158,13 +158,23 @@ display, HDD, PMU/backlight, clickwheel, audio.
   leave `ATA_IRQ` = 4 at boot; the driver clears it before InterruptInitialize.
 - 2026-11-26: **Disk writes verified** (128 GB iFlash, registry `AllowWrite` 1): Write test 4 MB
   OK, 11428 KB/s write, flush (E7) 3 ms, 10255 KB/s read back. With `AllowWrite` 0 the driver
-  refuses write opens (`o 2`) and creating a file fails with error 5. Repo default stays 0.
+  refuses write opens (`o 2`) and creating a file fails with error 5. The image enables writing
+  (`platform.reg` AllowWrite 1, user's choice, commit 1f18823); the driver's default is 0.
   Flush thread verified (sent 2, pend 0 after the write test). Not yet checked: Rockbox/PC
-  reading the volume afterwards.
+  reading the volume afterwards (checked later: not corrupted).
 - 2026-11-26: **Spin-down when idle verified** (level 1): registry `IdleTimeout` (image: 10 s) ->
   flush + STANDBY IMMEDIATE; HDD 268 ms, iFlash 10 ms; the next access spins up (user-observed on
   the HDD; the spin-up log line was not captured). The iFlash still gets warm in standby: next
   is level 2, power off as Rockbox's `ata_power_down()` (PMU reg 0x1B, pins, clock).
+- 2026-11-26: **Disk power-off when idle verified** (level 2, registry `IdlePowerOff` 1, both the
+  iFlash and the HDD): standby, controller stopped, clock gated, pins released, PMU reg 0x1B = 0
+  over `I2C1:`. iFlash log: `disk powered off in 51 ms`, `disk powered up in ~2490 ms, mode 44,
+  ... settings refused 0`, four cycles, Verify file and Write test OK after power-up. The iFlash no
+  longer gets warm when idle. Restart from the desktop with the disk off: Rockbox's bootloader
+  powers it up and loads (user-observed). Only the iFlash log was captured.
+- 2026-11-26 (user-reported): **cold (PLAY) start** works with DMA, writes and power-off (DMA plan
+  step 4 done); whlkeys holds verified (MENU held = WM_CLOSE, play held = Start); the FAT32 volume
+  is not corrupted after writes from CE.
 
 ## Display driver (src/drivers/ipodlcd) - test pattern verified on hardware 2026-11-19
 - `ipodlcd.dll`, GPE flat driver (structure from CEonPi raspiBasic_ddi), loaded by GWES (SHMK).

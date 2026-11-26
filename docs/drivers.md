@@ -110,10 +110,22 @@ the click wheel in particular will need their own set-up there (see each
   is; the next read or write spins it up by itself, and that transfer's
   waits get 15 s extra. Log: `ipodata: disk spun down (standby) in N ms`,
   `ipodata: disk spun up for a transfer in N ms`.
-- **Does not:** power the disk off (planned: level 2, Rockbox's
-  `ata_power_down()`); besides reads, writes, flushes and standby it sends
-  only the transfer mode (SET FEATURES 0x03) and a software reset after a
-  failed DMA transfer.
+- **Switches the disk off when unused** with registry `IdlePowerOff` 1
+  (the image's setting; 0 = spin down only): as Rockbox's `ata_sleepnow()`
+  + `ata_power_down()`, flush and STANDBY IMMEDIATE (only the flush for a
+  disk without power management, identify words 82/85 bit 3), the
+  controller disabled (waits for `ATA_CONTROL` bit 1) and its clock gated
+  (`PWRCON0` bit 5), the pins released (PCON7-9, PCON10 low half, PCON11
+  low nibble), and the supply off: power chip register 0x1B = 0 through
+  `I2C1:` (the I2C allowlist takes 0 or 1 there, nothing else). The next
+  read or write powers it up as `ata_power_up()`: supply, pins, clock,
+  controller reset, IDENTIFY (20 s allowed), PIO timing, DMA mode, then
+  Rockbox's SET FEATURES (write cache, look-ahead, APM 0x80, AAM 0x80).
+  A disk that answers with another size afterwards is not used. Log:
+  `ipodata: disk powered off in N ms`, `ipodata: disk powered up in N ms`.
+- **Does not:** reset or power the disk at load (it relies on Rockbox
+  having it on); besides the above it sends only the transfer mode and a
+  software reset after a failed DMA transfer.
 - **Check:** "iPod disk" on the desktop (the volume found, reads, writes,
   flushes and refusals, the last error and the step it happened at, the
   stores Windows lists; "Verify file" reads `\iPod\wince.ipod` to its end
@@ -136,9 +148,11 @@ the click wheel in particular will need their own set-up there (see each
   register number + stop + a new start (no repeated start), every wait
   bounded, and the bus is released after a failure. Writes are new.
 - **Allowlist** (`g_allow` in `ipodi2c.c`): only the two chips above.
-  The power chip takes writes only to 0x52-0x54 (battery measurement), so
-  its supply and charger settings cannot be changed by a wrong caller. The
-  codec takes writes to any register. Anything else is refused before the
+  The power chip takes writes only to 0x52-0x54 (battery measurement) and
+  to 0x1B with the values 0 or 1 (the disk's supply, Rockbox's
+  `pmu_hdd_power`, for the disk driver's power-off), so its other supplies
+  and charger settings cannot be changed by a wrong caller. The codec takes
+  writes to any register. Anything else is refused before the
   bus is touched (`ERROR_ACCESS_DENIED`, counted as "refused").
 - `IOCTL_IPODI2C_GET_STATE` (`ipodi2c.h`): reads, writes, errors, refusals,
   and the chip, register, step and code of the last failure. The first 16

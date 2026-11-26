@@ -11,7 +11,7 @@
 extern "C" {
 #endif
 
-#define IPODATA_VERSION         5
+#define IPODATA_VERSION         6
 #define IPODATA_SECTOR_BYTES    512
 #define IPODATA_MAX_SECTORS     128     // per read call (64 KB, the DMA buffer)
 
@@ -38,6 +38,9 @@ extern "C" {
 #define IPODATA_E_RANGE         14      // outside the disk, or too many sectors at once
 #define IPODATA_E_PARAM         15
 #define IPODATA_E_DMA_TIMEOUT   16      // the controller never said the DMA transfer was done
+#define IPODATA_E_SUPPLY        17      // the power chip did not take the disk's supply setting
+#define IPODATA_E_CTRL_STOP     18      // the controller did not report itself stopped
+#define IPODATA_E_OTHER_DISK    19      // after power-up the disk reports another size
 
 // steps (IPODATA_STATUS.lastStep)
 #define IPODATA_STEP_CHECK      1       // looking at what Rockbox left
@@ -56,6 +59,9 @@ extern "C" {
 #define IPODATA_STEP_WR_END     15      // write: after the last sector
 #define IPODATA_STEP_FLUSH      16      // flush cache
 #define IPODATA_STEP_STANDBY    17      // standby immediate (spin down)
+#define IPODATA_STEP_POWER_OFF  18      // switching the disk off
+#define IPODATA_STEP_POWER_ON   19      // power, pins, controller reset
+#define IPODATA_STEP_PU_ID      20      // power-up: the disk that answered is not the one shown
 
 typedef struct {
     DWORD   version;
@@ -143,6 +149,17 @@ typedef struct {
     DWORD   lastSpinUpMs;   // how long the first transfer after standby took
     DWORD   maxSpinUpMs;
 
+    // switching the disk off (IpodAta_PowerOff); the next command powers it up
+    DWORD   canPowerManage; // identify words 82/85 bit 3: the disk takes STANDBY IMMEDIATE
+    DWORD   poweredOff;     // 1: supply, pins and controller off
+    DWORD   powerOffs;
+    DWORD   powerOffErrors;
+    DWORD   powerUps;
+    DWORD   powerUpErrors;
+    DWORD   lastPowerUpMs;  // supply on to the disk answering IDENTIFY with its mode set
+    DWORD   maxPowerUpMs;
+    DWORD   featureErrors;  // SET FEATURES at power-up the disk refused (not fatal)
+
     // registers now
     DWORD   control;
     DWORD   cfg;
@@ -178,6 +195,15 @@ DWORD IpodAta_Flush(void);
 // or write spins it up again by itself, and that one transfer is given
 // extra time for it. 0 = ok, also when it is in standby already.
 DWORD IpodAta_Standby(void);
+
+// Switches the disk off, as Rockbox's ata_sleepnow() + ata_power_down():
+// flush and standby (or only the flush when the disk has no power
+// management), the controller stopped and its clock gated, the disk's pins
+// released, and its supply off at the power chip (I2C1:, register 0x1B).
+// The next read or write powers it up again: supply, pins, controller
+// reset, IDENTIFY, timing and transfer mode, as Rockbox's ata_power_up().
+// 0 = ok, also when it is off already.
+DWORD IpodAta_PowerOff(void);
 
 // DMA reads wait for the ATA interrupt on sysIntr (SYSINTR_ATA) instead of
 // polling. Quiets the controller's interrupt sources first. FALSE = it

@@ -12,7 +12,7 @@
 extern "C" {
 #endif
 
-#define IPODDSK_VERSION     6       // 6: spin down when idle (IPODATA_STATUS version 5)
+#define IPODDSK_VERSION     7       // 7: power off when idle (IPODATA_STATUS version 6)
 #define IPODDSK_PROFILE     L"iPodDisk"     // System\StorageManager\Profiles\iPodDisk
 
 // where the look at the disk at start-up stopped (IPODDSK_STATUS.setupStep)
@@ -64,6 +64,7 @@ typedef struct {
 
     // spinning down when idle (registry IdleTimeout; counts in ata.spin...)
     DWORD   idleTimeout;    // seconds without a read or write before standby, 0 = never
+    DWORD   idlePowerOff;   // registry IdlePowerOff: 1 = switch the disk off then, not only spin down
     DWORD   getInfos;
     DWORD   deviceInfos;
     DWORD   getNames;

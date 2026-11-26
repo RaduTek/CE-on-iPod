@@ -21,7 +21,9 @@
 // Spinning down. After "IdleTimeout" seconds (registry, default 30, 0 =
 // never) without a read or write, the idle thread flushes and sends
 // STANDBY IMMEDIATE. The disk stays powered; the next read or write spins
-// it up by itself and is given SPINUP_WAIT_MS extra (ipodata.c).
+// it up by itself and is given SPINUP_WAIT_MS extra (ipodata.c). With
+// "IdlePowerOff"=1 the disk is switched off instead (IpodAta_PowerOff: also
+// its supply, pins and controller), and the next read or write powers it up.
 //
 // The sector size. The disk answers in blocks of 512 bytes, but an iPod
 // that iTunes formatted has a partition table and a FAT32 file system that
@@ -64,6 +66,7 @@ static BYTE             g_bounce[IPODATA_MAX_SECTORS * IPODATA_SECTOR_BYTES];
 #define FLUSH_DELAY_MS  2000            // the disk's cache is flushed this long after the last write
 static BOOL             g_allowWrite;   // registry AllowWrite, read once at load
 static DWORD            g_idleMs;       // registry IdleTimeout (s) in ms: spin down after this long unused, 0 = never
+static BOOL             g_idlePowerOff; // registry IdlePowerOff: then switch the disk off, not only spin it down
 static HANDLE           g_hActivity;    // set after each read or write: wakes the idle thread
 static volatile DWORD   g_lastWriteTick;
 static volatile DWORD   g_lastUseTick;  // the last read or write
@@ -436,7 +439,11 @@ static void DoStandby(void)
     if (GetTickCount() - g_lastUseTick >= g_idleMs)
     {
         FlushLocked();
-        IpodAta_Standby();                  // counts and logs itself; a no-op in standby already
+        // each counts and logs itself, and is a no-op when done already
+        if (g_idlePowerOff)
+            IpodAta_PowerOff();
+        else
+            IpodAta_Standby();
     }
     LeaveCriticalSection(&g_cs);
 }
@@ -520,7 +527,7 @@ static BOOL Refuse(DWORD *pCounter, DWORD error)
 DWORD DSK_Init(LPCTSTR pContext, DWORD dwBusContext)
 {
     HKEY hKey;
-    DWORD useDma, sysIntr, allowWrite, idleS;
+    DWORD useDma, sysIntr, allowWrite, idleS, idleOff;
     IPODATA_STATUS st;
     HANDLE hThread = NULL;
 
@@ -529,12 +536,14 @@ DWORD DSK_Init(LPCTSTR pContext, DWORD dwBusContext)
     // the driver's own registry key: "UseDma" 0 = PIO only (default 1);
     // "SysIntr" for DMA completion (default SYSINTR_ATA), 0 = polled;
     // "AllowWrite" 1 = writes reach the disk (default 0: read only);
-    // "IdleTimeout" seconds unused before the disk spins down (default 30, 0 = never)
+    // "IdleTimeout" seconds unused before the disk spins down (default 30, 0 = never);
+    // "IdlePowerOff" 1 = then switch it off altogether (default 0: spin down only)
     hKey = OpenDeviceKey(pContext);
     useDma = RegDword(hKey, L"UseDma", 1);
     sysIntr = RegDword(hKey, L"SysIntr", SYSINTR_ATA);
     allowWrite = RegDword(hKey, L"AllowWrite", 0);
     idleS = RegDword(hKey, L"IdleTimeout", 30);
+    idleOff = RegDword(hKey, L"IdlePowerOff", 0);
     if (hKey != NULL)
         RegCloseKey(hKey);
     if (idleS > 24 * 3600)
@@ -565,6 +574,7 @@ DWORD DSK_Init(LPCTSTR pContext, DWORD dwBusContext)
         {
             g_allowWrite = (allowWrite == 1);
             g_idleMs = idleS * 1000;
+            g_idlePowerOff = (idleOff == 1);
             g_lastUseTick = GetTickCount();
             ResumeThread(hThread);
             CloseHandle(hThread);
@@ -572,8 +582,10 @@ DWORD DSK_Init(LPCTSTR pContext, DWORD dwBusContext)
     }
     g_ds.allowWrite = g_allowWrite ? 1 : 0;
     g_ds.idleTimeout = g_idleMs / 1000;
-    RETAILMSG(1, (L"ipoddsk: writing %s (registry AllowWrite %u); spin down after %u s unused%s\r\n",
-                  g_allowWrite ? L"ALLOWED" : L"off, read only", allowWrite, g_idleMs / 1000,
+    g_ds.idlePowerOff = g_idlePowerOff ? 1 : 0;
+    RETAILMSG(1, (L"ipoddsk: writing %s (registry AllowWrite %u); %s after %u s unused%s\r\n",
+                  g_allowWrite ? L"ALLOWED" : L"off, read only", allowWrite,
+                  g_idlePowerOff ? L"POWER OFF" : L"spin down", g_idleMs / 1000,
                   g_idleMs ? L"" : L" (never)"));
     return 1;                   // stay loaded in any case, so the panel can say what is wrong
 }

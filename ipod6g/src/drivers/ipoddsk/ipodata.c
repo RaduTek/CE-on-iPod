@@ -4,18 +4,21 @@
 // The disk controller of the S5L8702 as Rockbox drives it (Rockbox
 // firmware/target/arm/s5l8702/ipod6g/storage_ata-6g.c, the part that is not
 // CE-ATA). Rockbox has just loaded Windows CE from this disk, so the disk is
-// powered, its pins are set up and the controller is enabled; none of that
-// is redone here. No power switching. The only setting sent to the disk is
-// its transfer mode (for DMA), and it is reset only after a failed DMA
-// transfer.
+// powered, its pins are set up and the controller is enabled; at load none
+// of that is redone. The disk is switched off only by IpodAta_PowerOff (the
+// idle timer), and then powered up again before the next transfer, both as
+// Rockbox does it (supply at the power chip register 0x1B through I2C1:,
+// pins, controller clock and reset).
 //
 // The commands this file can send, and no others (there is no way to pass
 // a command in): IDENTIFY DEVICE (0xEC); READ SECTORS (0x20/0x24 EXT), READ
 // DMA (0xC8/0x25 EXT); WRITE SECTORS (0x30/0x34 EXT), WRITE DMA (0xCA/0x35
 // EXT); FLUSH CACHE (0xE7/0xEA EXT); STANDBY IMMEDIATE (0xE0, spin down;
-// the next command spins the disk up); SET FEATURES (0xEF) subcommand 0x03
-// (transfer mode) only; and a software reset through the device control
-// register after a failed DMA transfer. Whether writing is allowed at all
+// the next command spins the disk up); SET FEATURES (0xEF) subcommands 0x03
+// (transfer mode) and, after a power-up only, Rockbox's 0x02 (write cache
+// on), 0xAA (read look-ahead on), 0x05/0x80 (APM) and 0x42/0x80 (AAM); and
+// a software reset through the device control register after a failed DMA
+// transfer. Whether writing is allowed at all
 // is decided by ipoddsk.c (registry AllowWrite), which calls IpodAta_Write
 // only then.
 //
@@ -44,8 +47,10 @@
 #include <winioctl.h>
 #include <ceddk.h>
 #include <pkfuncs.h>
+#include <i2c.h>
 
 #include <ipodata.h>
+#include <ipodi2c.h>
 
 // physical addresses (Rockbox firmware/export/s5l87xx.h, S5L8702)
 #define PA_CLK              0x3C500000
@@ -59,6 +64,7 @@
 
 #define ATA_CONTROL         0x00
 #define ATA_COMMAND         0x08
+#define ATA_SWRST           0x0C        // the controller's own reset
 #define ATA_IRQ             0x10
 #define ATA_IRQ_MASK        0x14
 #define ATA_CFG             0x18
@@ -84,6 +90,17 @@
 
 #define ATA_COMMAND_START   (1 << 0)
 #define ATA_COMMAND_STOP    (1 << 1)
+#define ATA_CONTROL_ENABLE  (1 << 0)
+#define ATA_CONTROL_STOPPED (1 << 1)    // set by the controller once disabled (Rockbox waits for it)
+#define PIO_TIME_POWERUP    0x191F7     // the slow PIO timing Rockbox identifies a freshly powered disk with
+
+// the disk's pins (Rockbox ata_power_up / ata_power_down)
+#define PCON_ATA            0x44444444  // PCON7, 8, 9 and the low half of PCON10
+#define PCON10_ATA_MASK     0x0000FFFF
+#define PCON11_ATA_MASK     0x0000000F  // cleared at power-down as Rockbox does
+
+// the power chip's register for the disk's supply (Rockbox pmu-6g.c pmu_hdd_power)
+#define PMU_HDD_POWER       0x1B
 #define ATA_CFG_PIO         (1 << 6)    // the configuration Rockbox reads the identify data in
 #define ATA_CFG_WRITE       (1 << 4)    // DMA direction: 1 = to the disk
 #define ATA_CFG_CLEAR_START ((1 << 7) | (1 << 8))               // cleared when a DMA transfer starts
@@ -126,6 +143,7 @@
 #define WRITE_WAIT_MS       (5000 + g_spinUpMs)
 #define DMA_WAIT_MS         (5000 + g_spinUpMs)
 #define SPINUP_WAIT_MS      15000
+#define POWERUP_WAIT_MS     20000       // supply on to IDENTIFY answered (a hard disk spins up meanwhile)
 #define FLUSH_WAIT_MS       10000       // a disk may write back several MB of cache
 #define RESET_WAIT_MS       5000
 #define DMA_BUF_BYTES       (IPODATA_MAX_SECTORS * IPODATA_SECTOR_BYTES)
@@ -136,7 +154,9 @@ static volatile UINT32 *g_pAta = NULL, *g_pClk = NULL, *g_pGpio = NULL;
 #define ATA_RD(off)         (g_pAta[(off) >> 2])
 #define ATA_WR(off, val)    (g_pAta[(off) >> 2] = (val))
 #define CLK_RD(off)         (g_pClk[(off) >> 2])
+#define CLK_WR(off, val)    (g_pClk[(off) >> 2] = (val))
 #define GPIO_RD(off)        (g_pGpio[(off) >> 2])
+#define GPIO_WR(off, val)   (g_pGpio[(off) >> 2] = (val))
 #define IPODATA_MAP_REGISTERS
 #endif
 
@@ -416,15 +436,16 @@ static int BestMode(DWORD bits, int max)
     return -1;
 }
 
-static DWORD SetTransferMode(DWORD mode)
+// SET FEATURES: feature (subcommand) with value in the sector count register.
+static DWORD SetFeature(DWORD feature, DWORD value)
 {
     DWORD rc, v;
 
     rc = WaitReadyForCommand(IDENTIFY_WAIT_MS);
     if (rc != IPODATA_OK)
         return rc;
-    if (!DiskWrite(ATA_PIO_DVR, 0) || !DiskWrite(ATA_PIO_FED, FEATURE_TRANSFER_MODE)
-        || !DiskWrite(ATA_PIO_SCR, mode) || !DiskWrite(ATA_PIO_CSD, CMD_SET_FEATURES))
+    if (!DiskWrite(ATA_PIO_DVR, 0) || !DiskWrite(ATA_PIO_FED, feature)
+        || !DiskWrite(ATA_PIO_SCR, value) || !DiskWrite(ATA_PIO_CSD, CMD_SET_FEATURES))
         return IPODATA_E_HANDSHAKE;
     rc = WaitNotBusy(IDENTIFY_WAIT_MS);
     if (rc != IPODATA_OK)
@@ -473,7 +494,7 @@ static void SetupDma(void)
     if (mode == IPODATA_MODE_PIO)
         return;
 
-    rc = SetTransferMode(mode);
+    rc = SetFeature(FEATURE_TRANSFER_MODE, mode);
     if (rc != IPODATA_OK)
     {
         g_st.modeError = rc;
@@ -497,9 +518,11 @@ static void SoftReset(void)
     WaitReadyForCommand(RESET_WAIT_MS);
 }
 
+static DWORD Identify(DWORD waitMs);
+
 DWORD IpodAta_Attach(BOOL useDma)
 {
-    DWORD rc, total;
+    DWORD rc;
 
     g_st.attached = 0;
     g_st.lastStep = 0;
@@ -525,13 +548,41 @@ DWORD IpodAta_Attach(BOOL useDma)
     ATA_WR(ATA_COMMAND, ATA_COMMAND_STOP);
     ATA_WR(ATA_CFG, ATA_CFG_PIO);
 
+    rc = Identify(IDENTIFY_WAIT_MS);
+    if (rc != IPODATA_OK)
+        return rc;
+
+    g_st.attached = 1;
+    g_st.dmaWanted = useDma ? 1 : 0;
+    SetupDma();
+    RETAILMSG(1, (L"ipodata: transfer mode %02x (%s), words 53 %04x 63 %04x 88 %04x 93 %04x\r\n",
+                  g_st.dmaMode, g_st.dmaMode ? L"DMA" : (useDma ? L"PIO, no DMA" : L"PIO, UseDma 0"),
+                  g_ident[53], g_ident[63], g_ident[88], g_ident[93]));
+    RETAILMSG(1, (L"ipodata: flush command %02x, write cache %s, power management %s (words 80 %04x 82 %04x 83 %04x 85 %04x)\r\n",
+                  g_st.flushCmd, (g_ident[85] & (1 << 5)) ? L"on" : L"off",
+                  g_st.canPowerManage ? L"yes" : L"NO",
+                  g_ident[80], g_ident[82], g_ident[83], g_ident[85]));
+    RETAILMSG(1, (L"ipodata: timing at boot MDMA %x UDMA %x, now MDMA %x UDMA %x, buffer at %08x\r\n",
+                  g_st.bootMdmaTime, g_st.bootUdmaTime, ATA_RD(ATA_MDMA_TIME), ATA_RD(ATA_UDMA_TIME),
+                  g_st.dmaBufPhys));
+    // a failed SET FEATURES does not fail the attach: reads stay PIO
+    g_st.lastStep = 0;
+    g_st.lastCode = IPODATA_OK;
+    return IPODATA_OK;
+}
+
+// IDENTIFY DEVICE, and what the driver takes from it. 0 = ok.
+static DWORD Identify(DWORD waitMs)
+{
+    DWORD rc, total;
+
     g_st.identifies++;
-    rc = WaitNotBusy(IDENTIFY_WAIT_MS);
+    rc = WaitNotBusy(waitMs);
     if (rc != IPODATA_OK)
         return Fail(IPODATA_STEP_ID_IDLE, rc);
     if (!DiskWrite(ATA_PIO_DVR, 0) || !DiskWrite(ATA_PIO_CSD, CMD_IDENTIFY))
         return Fail(IPODATA_STEP_ID_CMD, IPODATA_E_HANDSHAKE);
-    rc = WaitForData(IDENTIFY_WAIT_MS);
+    rc = WaitForData(waitMs);
     if (rc != IPODATA_OK)
         return Fail(IPODATA_STEP_ID_DATA, rc);
     if (!TakeWords((BYTE *)g_ident, 256))
@@ -578,21 +629,9 @@ DWORD IpodAta_Attach(BOOL useDma)
     else
         g_st.flushCmd = 0;
 
-    g_st.attached = 1;
-    g_st.dmaWanted = useDma ? 1 : 0;
-    SetupDma();
-    RETAILMSG(1, (L"ipodata: transfer mode %02x (%s), words 53 %04x 63 %04x 88 %04x 93 %04x\r\n",
-                  g_st.dmaMode, g_st.dmaMode ? L"DMA" : (useDma ? L"PIO, no DMA" : L"PIO, UseDma 0"),
-                  g_ident[53], g_ident[63], g_ident[88], g_ident[93]));
-    RETAILMSG(1, (L"ipodata: flush command %02x, write cache %s (words 80 %04x 82 %04x 83 %04x 85 %04x)\r\n",
-                  g_st.flushCmd, (g_ident[85] & (1 << 5)) ? L"on" : L"off",
-                  g_ident[80], g_ident[82], g_ident[83], g_ident[85]));
-    RETAILMSG(1, (L"ipodata: timing at boot MDMA %x UDMA %x, now MDMA %x UDMA %x, buffer at %08x\r\n",
-                  g_st.bootMdmaTime, g_st.bootUdmaTime, ATA_RD(ATA_MDMA_TIME), ATA_RD(ATA_UDMA_TIME),
-                  g_st.dmaBufPhys));
-    // a failed SET FEATURES does not fail the attach: reads stay PIO
-    g_st.lastStep = 0;
-    g_st.lastCode = IPODATA_OK;
+    // power management feature set supported and enabled: the disk takes
+    // STANDBY IMMEDIATE (Rockbox ata_disk_can_sleep)
+    g_st.canPowerManage = ((g_ident[82] & (1 << 3)) && (g_ident[85] & (1 << 3))) ? 1 : 0;
     return IPODATA_OK;
 }
 
@@ -818,6 +857,133 @@ static DWORD CheckRequest(DWORD lbaLow, DWORD lbaHigh, DWORD count, const void *
     return IPODATA_OK;
 }
 
+//------------------------------------------------------------------------------
+// the disk's power (level 2: IpodAta_PowerOff, and PowerUp before the next transfer)
+//
+// The disk's supply at the power chip, through the I2C driver (which allows
+// only this register, and only 0 or 1, besides the battery measurement).
+static DWORD DiskSupply(BOOL on)
+{
+    HANDLE h;
+    BYTE v = on ? 1 : 0;
+    BOOL ok;
+
+    h = I2cOpen(IPODI2C_DEVICE);
+    if (h == INVALID_HANDLE_VALUE)
+        return IPODATA_E_SUPPLY;
+    ok = I2cSetSlaveAddress(h, IPODI2C_ADDR_PMU) && I2cWrite(h, PMU_HDD_POWER, &v, 1);
+    I2cClose(h);
+    return ok ? IPODATA_OK : IPODATA_E_SUPPLY;
+}
+
+// Waits (up to timeoutMs) for the controller to take a register access.
+static BOOL WaitControllerReady(DWORD timeoutMs)
+{
+    DWORD start = GetTickCount();
+
+    while (!(ATA_RD(ATA_PIO_READY) & 2))
+    {
+        if (GetTickCount() - start >= timeoutMs)
+            return FALSE;
+        Sleep(1);
+    }
+    return TRUE;
+}
+
+// Rockbox's ata_power_up() for a PATA disk: supply, pins, clock, the
+// controller reset and enabled, IDENTIFY at slow PIO timing, then the PIO
+// timing, DMA mode and settings for the disk that answered. On failure the
+// disk counts as off still, so the next transfer tries all of it again.
+static DWORD PowerUp(void)
+{
+    DWORD rc, t0, ms, pio, oldLow = g_st.sectorsLow, oldHigh = g_st.sectorsHigh;
+
+    t0 = GetTickCount();
+    rc = DiskSupply(TRUE);
+    if (rc != IPODATA_OK)
+    {
+        g_st.powerUpErrors++;
+        return Fail(IPODATA_STEP_POWER_ON, rc);
+    }
+    GPIO_WR(GPIO_PCON(7), PCON_ATA);
+    GPIO_WR(GPIO_PCON(8), PCON_ATA);
+    GPIO_WR(GPIO_PCON(9), PCON_ATA);
+    GPIO_WR(GPIO_PCON(10), (GPIO_RD(GPIO_PCON(10)) & ~PCON10_ATA_MASK) | (PCON_ATA & PCON10_ATA_MASK));
+    // PWRCON0 is shared; the LCD and sound drivers change their bits only at start-up
+    CLK_WR(CLK_PWRCON0, CLK_RD(CLK_PWRCON0) & ~PWRCON0_ATA);
+
+    ATA_WR(ATA_CFG, 1);
+    Sleep(10);
+    ATA_WR(ATA_CFG, 0);
+    Sleep(10);
+    ATA_WR(ATA_SWRST, 1);
+    Sleep(10);
+    ATA_WR(ATA_SWRST, 0);
+    Sleep(100);
+    ATA_WR(ATA_CONTROL, ATA_CONTROL_ENABLE);
+    Sleep(200);
+    ATA_WR(ATA_IRQ_MASK, 0);            // nothing for the interrupt line until a transfer asks
+    ATA_WR(ATA_IRQ, ATA_IRQ_ALL);
+    ATA_WR(ATA_PIO_TIME, PIO_TIME_POWERUP);
+    ATA_WR(ATA_PIO_LHR, 0);
+    ATA_WR(ATA_CFG, ATA_CFG_PIO);
+    if (!WaitControllerReady(1000))
+    {
+        g_st.powerUpErrors++;
+        return Fail(IPODATA_STEP_POWER_ON, IPODATA_E_HANDSHAKE);
+    }
+
+    rc = Identify(POWERUP_WAIT_MS);
+    if (rc != IPODATA_OK)
+    {
+        g_st.powerUpErrors++;
+        return rc;
+    }
+    if (g_st.sectorsLow != oldLow || g_st.sectorsHigh != oldHigh || g_st.sectorBytes != IPODATA_SECTOR_BYTES)
+    {
+        // not the disk Windows was shown: nothing more goes to it
+        g_st.attached = 0;
+        g_st.powerUpErrors++;
+        return Fail(IPODATA_STEP_PU_ID, IPODATA_E_OTHER_DISK);
+    }
+
+    // PIO timing for this disk (Rockbox): mode 4 or 3 if words 64-70 say so
+    pio = 0x11F3;
+    if (g_ident[53] & (1 << 1))
+    {
+        if (g_ident[64] & (1 << 1))
+            pio = 0x2072;
+        else if (g_ident[64] & (1 << 0))
+            pio = 0x7083;
+    }
+    ATA_WR(ATA_PIO_TIME, pio);
+    SetupDma();                         // timing and SET FEATURES transfer mode; PIO if refused
+
+    // the settings a power cycle took back to the disk's defaults, as Rockbox
+    // sets them; a refusal is counted, not fatal
+    if ((g_ident[82] & (1 << 5)) && SetFeature(0x02, 0) != IPODATA_OK)
+        g_st.featureErrors++;           // write cache on
+    if ((g_ident[82] & (1 << 6)) && SetFeature(0xAA, 0) != IPODATA_OK)
+        g_st.featureErrors++;           // read look-ahead on
+    if ((g_ident[83] & (1 << 3)) && SetFeature(0x05, 0x80) != IPODATA_OK)
+        g_st.featureErrors++;           // APM: lowest power without standby
+    if ((g_ident[83] & (1 << 9)) && SetFeature(0x42, 0x80) != IPODATA_OK)
+        g_st.featureErrors++;           // AAM: quietest
+
+    g_st.poweredOff = 0;
+    g_st.standby = 1;                   // the first transfer gets the spin-up allowance too
+    g_st.powerUps++;
+    ms = GetTickCount() - t0;
+    g_st.lastPowerUpMs = ms;
+    if (ms > g_st.maxPowerUpMs)
+        g_st.maxPowerUpMs = ms;
+    g_st.lastStep = 0;
+    g_st.lastCode = IPODATA_OK;
+    RETAILMSG(1, (L"ipodata: disk powered up in %u ms, mode %02x, PIO timing %x, settings refused %u\r\n",
+                  ms, g_st.dmaMode, pio, g_st.featureErrors));
+    return IPODATA_OK;
+}
+
 // Before a read or write: extra time for every wait if the disk was spun
 // down. The command spins it up whatever comes of it, so the flag goes.
 static void SpinUpBegin(void)
@@ -850,6 +1016,8 @@ DWORD IpodAta_Read(DWORD lbaLow, DWORD lbaHigh, DWORD count, BYTE *pOut)
     DWORD rc, t0;
 
     rc = CheckRequest(lbaLow, lbaHigh, count, pOut);
+    if (rc == IPODATA_OK && g_st.poweredOff)
+        rc = PowerUp();
     if (rc != IPODATA_OK)
         return rc;
 
@@ -892,6 +1060,8 @@ DWORD IpodAta_Write(DWORD lbaLow, DWORD lbaHigh, DWORD count, const BYTE *pIn)
     DWORD rc, t0;
 
     rc = CheckRequest(lbaLow, lbaHigh, count, pIn);
+    if (rc == IPODATA_OK && g_st.poweredOff)
+        rc = PowerUp();
     if (rc != IPODATA_OK)
         return rc;
 
@@ -1010,6 +1180,67 @@ DWORD IpodAta_Standby(void)
     g_st.standby = 1;
     g_st.spinDowns++;
     RETAILMSG(1, (L"ipodata: disk spun down (standby) in %u ms\r\n", GetTickCount() - t0));
+    return IPODATA_OK;
+}
+
+DWORD IpodAta_PowerOff(void)
+{
+    DWORD rc, i, t0;
+
+    g_st.lastStep = 0;
+    g_st.lastCode = IPODATA_OK;
+    if (!g_st.attached)
+        return Fail(IPODATA_STEP_CHECK, IPODATA_E_NOT_ATTACHED);
+    if (g_st.poweredOff)
+        return IPODATA_OK;
+
+    // the cache to the platter and the platter stopped; a disk without power
+    // management only gets the flush (Rockbox does the same). If that fails,
+    // the disk stays on (its cache may hold data).
+    t0 = GetTickCount();
+    rc = g_st.canPowerManage ? IpodAta_Standby() : IpodAta_Flush();
+    if (rc != IPODATA_OK)
+    {
+        g_st.powerOffErrors++;
+        return rc;
+    }
+    Sleep(33);
+
+    // the controller: no interrupt source left, then disabled
+    ATA_WR(ATA_IRQ_MASK, 0);
+    ATA_WR(ATA_IRQ, ATA_IRQ_ALL);
+    ATA_WR(ATA_CONTROL, 0);
+    for (i = 0; i < 100 && !(ATA_RD(ATA_CONTROL) & ATA_CONTROL_STOPPED); i++)
+        Sleep(1);
+    if (!(ATA_RD(ATA_CONTROL) & ATA_CONTROL_STOPPED))
+    {
+        ATA_WR(ATA_CONTROL, ATA_CONTROL_ENABLE);    // leave it as it was, on
+        g_st.powerOffErrors++;
+        RETAILMSG(1, (L"ipodata: the disk controller did not stop: disk left on\r\n"));
+        return Fail(IPODATA_STEP_POWER_OFF, IPODATA_E_CTRL_STOP);
+    }
+
+    // its clock (PWRCON0 is shared; the LCD and sound drivers change their
+    // bits only at start-up), the disk's pins, then its supply
+    CLK_WR(CLK_PWRCON0, CLK_RD(CLK_PWRCON0) | PWRCON0_ATA);
+    GPIO_WR(GPIO_PCON(7), 0);
+    GPIO_WR(GPIO_PCON(8), 0);
+    GPIO_WR(GPIO_PCON(9), 0);
+    GPIO_WR(GPIO_PCON(10), GPIO_RD(GPIO_PCON(10)) & ~PCON10_ATA_MASK);
+    GPIO_WR(GPIO_PCON(11), GPIO_RD(GPIO_PCON(11)) & ~PCON11_ATA_MASK);
+    rc = DiskSupply(FALSE);
+
+    // off from here on either way: the next transfer powers it up from scratch
+    g_st.poweredOff = 1;
+    g_st.standby = 1;
+    if (rc != IPODATA_OK)
+    {
+        g_st.powerOffErrors++;
+        RETAILMSG(1, (L"ipodata: disk stopped, but its supply could not be switched off (I2C)\r\n"));
+        return Fail(IPODATA_STEP_POWER_OFF, rc);
+    }
+    g_st.powerOffs++;
+    RETAILMSG(1, (L"ipodata: disk powered off in %u ms\r\n", GetTickCount() - t0));
     return IPODATA_OK;
 }
 

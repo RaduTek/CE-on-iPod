@@ -355,9 +355,7 @@ static void PaintFolder(HDC hdc, int *py)
         }
     } while (FindNextFile(h, &fd) && n < 500);
     FindClose(h);
-    Line(hdc, py, sz);
-    wsprintf(sz, L"  %u%s entries in all", n, n >= 500 ? L"+" : L"");
-    Line(hdc, py, sz);
+    Line(hdc, py, sz);              // (no count line: the panel has no room left)
 }
 
 static void Paint(HDC hdc)
@@ -419,10 +417,15 @@ static void Paint(HDC hdc)
                  g_st.ata.flushCmd, g_st.flushes, g_st.flushesDone, g_st.flushErrors, g_st.flushPending,
                  g_st.ata.lastFlushMs, g_st.writesRefused, g_st.opensRefused, g_st.formatsRefused);
         Line(hdc, &y, sz);
-        wsprintf(sz, L"idle %u s: disk %s; down %u (failed %u), up %u, last %u ms, max %u",
-                 g_st.idleTimeout, g_st.ata.standby ? L"SPUN DOWN" : L"spinning",
+        wsprintf(sz, L"idle %u s %s: disk %s; down %u (failed %u), up %u, last %u ms, max %u",
+                 g_st.idleTimeout, g_st.idlePowerOff ? L"off" : L"standby",
+                 g_st.ata.poweredOff ? L"OFF" : g_st.ata.standby ? L"SPUN DOWN" : L"spinning",
                  g_st.ata.spinDowns, g_st.ata.spinDownErrors, g_st.ata.spinUps,
                  g_st.ata.lastSpinUpMs, g_st.ata.maxSpinUpMs);
+        Line(hdc, &y, sz);
+        wsprintf(sz, L"power: off %u (failed %u), on %u (failed %u), last %u ms, max %u, PM %u, feat err %u",
+                 g_st.ata.powerOffs, g_st.ata.powerOffErrors, g_st.ata.powerUps, g_st.ata.powerUpErrors,
+                 g_st.ata.lastPowerUpMs, g_st.ata.maxPowerUpMs, g_st.ata.canPowerManage, g_st.ata.featureErrors);
         Line(hdc, &y, sz);
         if (g_st.ata.errors || !g_st.ready)
         {
