@@ -139,6 +139,8 @@ display, HDD, PMU/backlight, clickwheel, audio.
   shared interrupt line left asserted by Rockbox/bootloader (DMAC0 ch 4, LCD DMA) stormed the
   MDD's IST and stopped the boot; drivers must quiet shared sources before enabling an IRQ.
   See docs/drivers.md "Sound".
+- 2026-11-26: **Windows' volume on the codec verified**: HPACTL/HPBCTL in 1 dB steps below
+  -20 dB over `I2C1:` (registry `CodecVolume` 1; 0 = scaled samples). The MDD plan is complete.
 
 ## Display driver (src/drivers/ipodlcd) - test pattern verified on hardware 2026-11-19
 - `ipodlcd.dll`, GPE flat driver (structure from CEonPi raspiBasic_ddi), loaded by GWES (SHMK).

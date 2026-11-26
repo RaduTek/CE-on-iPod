@@ -38,6 +38,8 @@ ENDIF BSP_NODISPLAY !
 ; the DMA ring every 5.8 ms (the MDD's own default is 210; CEonPi needed 110).
 ; "TestTone" 1: at start-up, 0.5 s 440 Hz LEFT then 0.5 s 880 Hz RIGHT
 ; through the DMA ring, with a log line on its interrupts; 0 = off.
+; "CodecVolume" 1: Windows' volume sets the codec's headphone level (1 dB
+; steps below -20 dB, over I2C1:); 0: the samples are scaled instead.
 [HKEY_LOCAL_MACHINE\Drivers\BuiltIn\IpodWav]
    "Prefix"="WAV"
    "Dll"="ipodwav.dll"
@@ -46,6 +48,7 @@ ENDIF BSP_NODISPLAY !
    "SysIntr"=dword:11
    "Priority256"=dword:6E
    "TestTone"=dword:0
+   "CodecVolume"=dword:1
    "IClass"=multi_sz:"{E92BC203-8354-4043-A06F-2A170BF6F227}",
                      "{37168569-61C4-45fd-BD54-9442C7DBA46F}"
 

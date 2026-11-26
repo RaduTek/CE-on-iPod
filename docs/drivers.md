@@ -40,14 +40,17 @@ the click wheel in particular will need their own set-up there (see each
   in Rockbox's order: I2S 0 clock and transmitter, `I2SCLKDIV` 272
   (44118 Hz), the codec's master clock (`CLKCON3`), its reset (port 3 pin
   3) low 10 ms, then through `I2C1:` the codec's version register and
-  Rockbox's `audiohw_preinit`/`postinit` register sequence. Headphones at a
-  fixed -20 dB (`IPODPCM_HP_DB`), unmuted; Windows' volume scales the
-  samples below that. Loads after `I2C1:` (`Order` 2).
+  Rockbox's `audiohw_preinit`/`postinit` register sequence. Headphones at
+  -20 dB (`IPODPCM_HP_DB`), unmuted. Loads after `I2C1:` (`Order` 2).
+- **Volume on the codec** (registry `CodecVolume` 1, the default): Windows'
+  volume sets the headphone levels (HPACTL left, HPBCTL right) through
+  `I2C1:` in 1 dB steps below -20 dB, down to the codec's -60 dB; 0 mutes.
+  The samples stay at full scale, so quiet sounds keep their resolution.
+  `CodecVolume` 0 scales the samples instead, as before.
 - **Expects:** the I2S pins set up (Rockbox's GPIO table, which the
   bootloader applies too) and the codec's supply on (Rockbox does not know
   which power chip output feeds it either).
-- **Does not:** change the rate, follow Windows' volume on the codec,
-  detect headphones, record.
+- **Does not:** change the rate, detect headphones, record.
 - **Check:** "Sound check" on the desktop (ring interrupts, late ones,
   underruns, the stream's format, DMA errors; a test tone and the start-up
   sound). Registry `TestTone` 1 plays 440 Hz left then 880 Hz right at

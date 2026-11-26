@@ -6,7 +6,9 @@ on `wavemdd.lib`, page engine and `getms.ps1` removed, status IOCTL version 3, `
 errors logged. Both starts log `DMA controller 0 quieted (pending on idle channels: 0x10)`, so the
 bootloader leaves channel 4 pending too (cold: `I2SCLKDIV was 0`). Every sound is a new
 `ipodwav: open 44100 Hz 16-bit stereo` (the mixer closes the device when idle; ~100 in a session
-with volume changes). Remaining: step 3 (codec volume), optional.
+with volume changes). Step 3 (volume on the codec, `CodecVolume` 1) **verified** (cold start, 2026-11-26): 96 volume
+changes through all 6 control-panel positions, steps audible, no `headphone level write failed`,
+no underruns. **The plan is complete.**
 First step 2 image **stopped the boot** after `ipodwav: wave MDD + PDD ... ready` (ROLO and cold):
 Rockbox's LCD DMA channel 4 (also in the bootloader) is left with a pending TC and its ITC enable
 on, which holds IRQ 16 high; the MDD's `InterruptInitialize` enabled it, its IST got `IGNORE`, and

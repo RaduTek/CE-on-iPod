@@ -33,15 +33,18 @@
 // played ("draining"), and WPDM_CLOSE waits for that, so the end of a sound
 // is not cut off.
 //
-// Volume: Windows' device volume scales the samples (0xFFFF = unity) below
-// the codec's fixed headphone level (IPODPCM_HP_DB).
+// Volume: Windows' device volume sets the codec's headphone level in 1 dB
+// steps below IPODPCM_HP_DB (IpodPcm_SetVolume, over I2C1:), and the samples
+// go out at full scale, so quiet sounds keep all their bits. With registry
+// CodecVolume 0 the samples are scaled instead (0xFFFF = unity) below the
+// codec's fixed level, as before.
 //
 // IOCTL_IPODPCM_GET_STATUS (ipodpcm.h) on WAV1: reaches the PDD through the
 // MDD's pfn_PDD_IoControl hook; the Sound check panel reads it.
 //
 // Registry (the driver's key): SysIntr (SYSINTR_AUDIO), Priority256 (also
 // the MDD's IST priority; the MDD's own default is 210), TestTone (1 = the
-// 440/880 Hz tone at start-up, pcmtone.c).
+// 440/880 Hz tone at start-up, pcmtone.c), CodecVolume (1 = default).
 //
 #include <windows.h>
 #include <types.h>
@@ -58,6 +61,7 @@
 #define REG_SYSINTR         L"SysIntr"
 #define REG_PRIORITY        L"Priority256"   // also read by the MDD for its IST
 #define DEFAULT_PRIORITY    110             // as CEonPi's sound IST
+#define REG_CODEC_VOLUME    L"CodecVolume"   // 1 = volume on the codec, 0 = samples scaled
 
 #define CLOSE_DRAIN_MS      500             // longest WPDM_CLOSE waits for the ring to play out
 
@@ -68,6 +72,7 @@ static CRITICAL_SECTION g_cs;               // protects the ring and g_out
 static BOOL             g_fInit;            // g_cs exists
 static BOOL             g_fHw;              // the hardware layer is set up
 static ULONG            g_ulVolume = 0xFFFFFFFF;   // low word left, high word right
+static BOOL             g_fCodecVolume = TRUE;     // volume on the codec, not the samples
 static IPODPCM_STATUS  *g_pSt;
 
 // Output stream state
@@ -111,8 +116,9 @@ static __inline int VolumeGain(WORD w)
 // Converts nFrames source frames at pSrc to ring words (left, right) at pOut.
 static void ConvertFrames(const BYTE *pSrc, INT32 *pOut, UINT nFrames)
 {
-    int gainL = VolumeGain(LOWORD(g_ulVolume));
-    int gainR = VolumeGain(HIWORD(g_ulVolume));
+    ULONG vol = g_fCodecVolume ? 0xFFFFFFFF : g_ulVolume;   // the codec does it, or the samples
+    int gainL = VolumeGain(LOWORD(vol));
+    int gainR = VolumeGain(HIWORD(vol));
     DWORD peak = g_pSt->peak;
     UINT i;
 
@@ -422,6 +428,7 @@ BOOL PDD_AudioInitialize(DWORD dwIndex)
     hKey = OpenDeviceKey((LPCWSTR)dwIndex);
     gIntrAudio = RegReadDword(hKey, REG_SYSINTR, SYSINTR_AUDIO);
     priority = RegReadDword(hKey, REG_PRIORITY, DEFAULT_PRIORITY);
+    g_fCodecVolume = (RegReadDword(hKey, REG_CODEC_VOLUME, 1) != 0);
 
     InitializeCriticalSection(&g_cs);
     g_fInit = TRUE;
@@ -432,8 +439,10 @@ BOOL PDD_AudioInitialize(DWORD dwIndex)
     // (GetOutCaps), and the panel's status says why.
     g_fHw = IpodPcm_Init();
     g_pSt = IpodPcm_Status();
-    RETAILMSG(1, (L"ipodwav: wave MDD + PDD, SysIntr %u, Priority256 %u, %s\r\n",
-                  gIntrAudio, priority, g_fHw ? L"ready" : L"NO OUTPUT DEVICE (set-up failed)"));
+    g_pSt->codecVolume = g_fCodecVolume;
+    RETAILMSG(1, (L"ipodwav: wave MDD + PDD, SysIntr %u, Priority256 %u, volume on the %s, %s\r\n",
+                  gIntrAudio, priority, g_fCodecVolume ? L"codec" : L"samples",
+                  g_fHw ? L"ready" : L"NO OUTPUT DEVICE (set-up failed)"));
 
     // before the MDD's InterruptInitialize on gIntrAudio
     if (g_fHw)
@@ -576,7 +585,10 @@ MMRESULT PDD_WaveProc(WAPI_INOUT apidir, DWORD dwCode, DWORD dwParam1, DWORD dwP
         return MMSYSERR_NOERROR;
 
     case WPDM_SETVOLUME:
+        // not under g_cs: the I2C write must not hold up the IST
         g_ulVolume = dwParam1;
+        if (g_fCodecVolume && g_fHw)
+            IpodPcm_SetVolume(dwParam1);
         return MMSYSERR_NOERROR;
 
     default:

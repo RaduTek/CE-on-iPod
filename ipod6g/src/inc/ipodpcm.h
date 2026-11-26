@@ -12,8 +12,9 @@
 extern "C" {
 #endif
 
-// 3: the wave MDD + PDD driver with the DMA ring (2 was the two-page driver)
-#define IPODPCM_VERSION             3
+// 4: Windows' volume on the codec (3: the wave MDD + PDD driver with the DMA
+// ring; 2 was the two-page driver)
+#define IPODPCM_VERSION             4
 
 // The driver sets the codec up itself at start-up (the same after a Rockbox
 // start and a cold start): 44.1 kHz, I2SCLKDIV = 12 MHz / 44100 = 272, so
@@ -21,8 +22,10 @@ extern "C" {
 // the driver at 44100 Hz only: its software mixer converts everything else.
 #define IPODPCM_RATE                44100
 
-// The codec's fixed headphone level in dB (-60 .. +12; Rockbox's default
-// volume is -25). Windows' volume scales the samples below this.
+// The codec's headphone level in dB at Windows' full volume (-60 .. +12;
+// Rockbox's default volume is -25). Lower volumes are 1 dB steps of the
+// codec's level below this, down to -60 dB (registry CodecVolume 1, the
+// default), or, with CodecVolume 0, the samples scaled below this.
 #define IPODPCM_HP_DB               (-20)
 
 // The mixer makes 16-bit samples, the path takes 24-bit ones. A shift of 8
@@ -82,7 +85,11 @@ typedef struct {
     DWORD   codecError;     // GetLastError of that step
     DWORD   codecVersion;   // the codec's register 0x01 (chip ID and revision)
     DWORD   codecWrites;    // registers written
-    DWORD   hpReg;          // the headphone level written (HPACTL/HPBCTL)
+    DWORD   hpReg;          // the headphone levels written: HPACTL | HPBCTL << 8 (0x80 = muted)
+    // Windows' volume on the codec (version 4)
+    DWORD   codecVolume;    // 1 = volume through the codec's level, 0 = samples scaled
+    DWORD   volWrites;      // headphone level registers written for volume changes
+    DWORD   volErrors;      // volume changes whose write failed
 } IPODPCM_STATUS;
 
 // codecStep

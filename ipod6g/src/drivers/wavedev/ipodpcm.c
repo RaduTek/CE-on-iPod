@@ -99,6 +99,9 @@
 #define CS_HPACTL           0x1A
 #define CS_HPBCTL           0x1B
 #define CS_HP_LEVEL         ((BYTE)((IPODPCM_HP_DB) & 0x7F))   // dB, two's complement, 7 bits
+#define CS_HP_MIN_DB        (-60)       // the codec's range (Rockbox: -60 .. +12 dB, 1 dB steps)
+#define CS_HP_MAX_DB        12
+#define CS_HP_MUTE          0x80        // HPxCTL bit 7
 
 typedef struct {
     BYTE    reg;
@@ -260,6 +263,106 @@ static BOOL CodecSetup(void)
           && CsWriteList(hBus, g_csPostinit, sizeof(g_csPostinit) / sizeof(g_csPostinit[0]));
     }
     I2cClose(hBus);
+    return ok;
+}
+
+// ---------------------------------------------------------------------------
+// Windows' volume as the codec's headphone level (IpodPcm_SetVolume)
+//
+// A volume word v (1 .. 0xFFFF) is 20 * log10(v / 65535) dB, rounded to the
+// nearest dB: g_halfDb[n] = 65535 * 10^(-(n + 0.5) / 20), so the attenuation
+// is the number of entries above v. Full volume is IPODPCM_HP_DB, the level
+// the driver always used; the codec goes down to -60 dB; 0 mutes.
+//
+static const WORD g_halfDb[72] = {
+    61869, 55141, 49144, 43800, 39037, 34792, 31008, 27636, 24631, 21952,
+    19565, 17437, 15541, 13851, 12344, 11002,  9806,  8739,  7789,  6942,
+     6187,  5514,  4914,  4380,  3904,  3479,  3101,  2764,  2463,  2195,
+     1956,  1744,  1554,  1385,  1234,  1100,   981,   874,   779,   694,
+      619,   551,   491,   438,   390,   348,   310,   276,   246,   220,
+      196,   174,   155,   139,   123,   110,    98,    87,    78,    69,
+       62,    55,    49,    44,    39,    35,    31,    28,    25,    22,
+       20,    17
+};
+
+static CRITICAL_SECTION g_csVol;        // the I2C handle below, g_hpA/B
+static BOOL     g_volInit;
+static HANDLE   g_hVolBus = INVALID_HANDLE_VALUE;
+static BYTE     g_hpA = CS_HP_LEVEL, g_hpB = CS_HP_LEVEL;   // as CodecSetup left them
+
+static BYTE HpLevel(WORD w)
+{
+    int n = 0, db;
+
+    if (w == 0)
+        return CS_HP_MUTE;
+    while (n < (int)(sizeof(g_halfDb) / sizeof(g_halfDb[0])) && w < g_halfDb[n])
+        n++;
+    db = IPODPCM_HP_DB - n;
+    if (db < CS_HP_MIN_DB)
+        db = CS_HP_MIN_DB;
+    if (db > CS_HP_MAX_DB)
+        db = CS_HP_MAX_DB;
+    return (BYTE)(db & 0x7F);
+}
+
+// One headphone register; the I2C handle is opened on first use and kept.
+static BOOL VolWrite(BYTE reg, BYTE value)
+{
+    if (g_hVolBus == INVALID_HANDLE_VALUE)
+    {
+        g_hVolBus = I2cOpen(IPODI2C_DEVICE);
+        if (g_hVolBus == INVALID_HANDLE_VALUE)
+            return FALSE;
+        if (!I2cSetSlaveAddress(g_hVolBus, IPODI2C_ADDR_CODEC))
+        {
+            I2cClose(g_hVolBus);
+            g_hVolBus = INVALID_HANDLE_VALUE;
+            return FALSE;
+        }
+    }
+    return I2cWrite(g_hVolBus, reg, &value, 1);
+}
+
+BOOL IpodPcm_SetVolume(ULONG volume)
+{
+    BYTE a, b;
+    BOOL ok = TRUE;
+
+    if (!g_volInit)
+        return FALSE;
+    a = HpLevel(LOWORD(volume));        // left: HPA, as Rockbox
+    b = HpLevel(HIWORD(volume));
+
+    EnterCriticalSection(&g_csVol);
+    if (a != g_hpA)
+    {
+        if (VolWrite(CS_HPACTL, a))
+        {
+            g_hpA = a;
+            g_st.volWrites++;
+        }
+        else
+            ok = FALSE;
+    }
+    if (b != g_hpB)
+    {
+        if (VolWrite(CS_HPBCTL, b))
+        {
+            g_hpB = b;
+            g_st.volWrites++;
+        }
+        else
+            ok = FALSE;
+    }
+    if (!ok)
+    {
+        if (g_st.volErrors++ == 0)
+            RETAILMSG(1, (L"ipodwav: headphone level write failed, error %u (volume 0x%08x)\r\n",
+                          GetLastError(), volume));
+    }
+    g_st.hpReg = g_hpA | (g_hpB << 8);
+    LeaveCriticalSection(&g_csVol);
     return ok;
 }
 
@@ -448,6 +551,10 @@ BOOL IpodPcm_Init(void)
     // before anyone enables IRQ 16 (the MDD, right after PDD_AudioInitialize)
     stale = DmacQuiet();                // also the controller's clock on
     ChannelOff();                       // our channel too (Rockbox plays through it)
+
+    InitializeCriticalSection(&g_csVol);
+    g_volInit = TRUE;
+    g_st.hpReg = g_hpA | (g_hpB << 8);
 
     g_st.rate = (I2S_MCLK_HZ + div / 2) / div;
     g_st.ready = 1;

@@ -17,7 +17,7 @@
 #define IDC_TONE        101
 #define IDC_CHIME       102
 #define IDC_STOP        103
-#define LINE_H          13
+#define LINE_H          12              // 13 lines under the buttons fit the 240-pixel screen
 #define BTN_H           22
 
 #define TONE_RATE       22050
@@ -224,8 +224,12 @@ static void Paint(HDC hdc)
     wsprintf(sz, L"interrupts %u  late %u  empty %u  spurious %u  max gap %u ms",
              g_st.interrupts, g_st.late, g_st.zeroAcks, g_st.spurious, g_st.maxGapMs);
     Line(hdc, &y, sz);
-    wsprintf(sz, L"underruns %u  faults %u  DMA errors %u  stuck %u  volume %08X",
-             g_st.underruns, g_st.faults, g_st.dmaErrors, g_st.stuckWaits, g_st.volume);
+    wsprintf(sz, L"underruns %u  faults %u  DMA errors %u  stuck %u",
+             g_st.underruns, g_st.faults, g_st.dmaErrors, g_st.stuckWaits);
+    Line(hdc, &y, sz);
+    wsprintf(sz, L"volume %08X on the %s: headphones %02X %02X, %u writes, %u failed",
+             g_st.volume, g_st.codecVolume ? L"codec" : L"samples",
+             g_st.hpReg & 0xFF, (g_st.hpReg >> 8) & 0xFF, g_st.volWrites, g_st.volErrors);
     Line(hdc, &y, sz);
     wsprintf(sz, L"peak %u (run before: %u)  read %u  write %u",
              g_st.peak, g_st.lastPeak, g_st.readPos, g_st.writePos);
@@ -237,8 +241,8 @@ static void Paint(HDC hdc)
     Line(hdc, &y, sz);
     wsprintf(sz, L"gates %08X %08X  clkcon3 %08X", g_st.pwrcon0, g_st.pwrcon1, g_st.clkcon3);
     Line(hdc, &y, sz);
-    wsprintf(sz, L"codec: version %02X  %u writes  headphones %02X  step %u reg %02X error %u",
-             g_st.codecVersion, g_st.codecWrites, g_st.hpReg, g_st.codecStep, g_st.codecReg, g_st.codecError);
+    wsprintf(sz, L"codec: version %02X  %u writes  step %u reg %02X error %u",
+             g_st.codecVersion, g_st.codecWrites, g_st.codecStep, g_st.codecReg, g_st.codecError);
     Line(hdc, &y, sz);
 
     SelectObject(hdc, hOld);

@@ -50,6 +50,14 @@ BOOL   IpodPcm_Init(void);
 // the hardware rate (44118 Hz); never 0
 DWORD  IpodPcm_Rate(void);
 
+// Windows' device volume (low word left, high word right, 0xFFFF = full) as
+// the codec's headphone levels (HPACTL left, HPBCTL right): full =
+// IPODPCM_HP_DB, 1 dB steps below it down to the codec's -60 dB, 0 = muted.
+// Writes only what changed, through I2C1: (blocks for the I2C transfer: not
+// to be called with the PDD's lock held). FALSE = a write failed (status
+// volErrors; logged once).
+BOOL   IpodPcm_SetVolume(ULONG volume);
+
 // The status the panel reads; the PDD keeps the stream fields of it.
 IPODPCM_STATUS *IpodPcm_Status(void);
 
