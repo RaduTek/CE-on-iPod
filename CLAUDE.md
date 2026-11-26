@@ -154,6 +154,12 @@ display, HDD, PMU/backlight, clickwheel, audio.
   DMA completion by interrupt next, then writes behind registry `AllowWrite` (cache on + flushes).
   Panels' buttons now work from the click wheel via `src\inc\panelkeys.h` (IsDialogMessage did
   not help plain windows on CE 7).
+- 2026-11-26: **DMA completion by interrupt verified** (SYSINTR_ATA 0x12 <-> IRQ 29). Rockbox can
+  leave `ATA_IRQ` = 4 at boot; the driver clears it before InterruptInitialize.
+- 2026-11-26: **Disk writes verified** (128 GB iFlash, registry `AllowWrite` 1): Write test 4 MB
+  OK, 11428 KB/s write, flush (E7) 3 ms, 10255 KB/s read back. With `AllowWrite` 0 the driver
+  refuses write opens (`o 2`) and creating a file fails with error 5. Repo default stays 0.
+  Not yet checked: flush thread (2 s after last write), Rockbox/PC reading the volume afterwards.
 
 ## Display driver (src/drivers/ipodlcd) - test pattern verified on hardware 2026-11-19
 - `ipodlcd.dll`, GPE flat driver (structure from CEonPi raspiBasic_ddi), loaded by GWES (SHMK).

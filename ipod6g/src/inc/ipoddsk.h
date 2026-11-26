@@ -12,7 +12,7 @@
 extern "C" {
 #endif
 
-#define IPODDSK_VERSION     4       // 4: IPODATA_STATUS version 3 (DMA interrupt)
+#define IPODDSK_VERSION     5       // 5: writes (IPODATA_STATUS version 4)
 #define IPODDSK_PROFILE     L"iPodDisk"     // System\StorageManager\Profiles\iPodDisk
 
 // where the look at the disk at start-up stopped (IPODDSK_STATUS.setupStep)
@@ -47,15 +47,26 @@ typedef struct {
     DWORD   lastStart;
     DWORD   lastCount;
     DWORD   readErrors;     // read requests the disk failed (see ata.lastStep ...)
-    DWORD   badRequests;    // read requests refused for their parameters
-    DWORD   writesRefused;  // write requests: all refused, none reaches the disk
-    DWORD   formatsRefused; // format, delete and wipe requests: likewise
+    DWORD   badRequests;    // read or write requests refused for their parameters
+    DWORD   writesRefused;  // write requests refused because writing is off
+    DWORD   opensRefused;   // opens for writing refused because writing is off
+    DWORD   formatsRefused; // format, delete and wipe requests: always refused
+
+    // writing (registry AllowWrite)
+    DWORD   allowWrite;
+    DWORD   writes;         // write requests carried out
+    DWORD   sectorsWritten; // in sectors as shown to Windows
+    DWORD   writeMs;
+    DWORD   writeErrors;    // write requests the disk failed (see ata.lastStep ...)
+    DWORD   flushPending;   // written since the last flush
+    DWORD   flushesDone;    // flushes sent to the disk (after writes only)
+    DWORD   flushErrors;
     DWORD   getInfos;
     DWORD   deviceInfos;
     DWORD   getNames;
     DWORD   setInfos;
     DWORD   initializeds;
-    DWORD   flushes;
+    DWORD   flushes;        // flush requests from Windows
     DWORD   others;         // requests this driver does not know
     DWORD   lastOther;      // the code of the last of those
 

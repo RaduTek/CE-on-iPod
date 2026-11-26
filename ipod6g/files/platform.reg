@@ -63,10 +63,10 @@ ENDIF BSP_NODISPLAY !
     "Screen"=dword:0
     "Mute"=dword:7
 
-; The iPod's disk, READ ONLY (src\drivers\ipoddsk). The IClass line is the
-; one of Microsoft's own block drivers: it is how the storage manager finds
-; a disk. "Ioctl" 4 = the device manager's call after loading
-; (DISK_IOCTL_INITIALIZED), as for those drivers.
+; The iPod's disk (src\drivers\ipoddsk), read only unless AllowWrite is 1.
+; The IClass line is the one of Microsoft's own block drivers: it is how
+; the storage manager finds a disk. "Ioctl" 4 = the device manager's call
+; after loading (DISK_IOCTL_INITIALIZED), as for those drivers.
 [HKEY_LOCAL_MACHINE\Drivers\BuiltIn\IpodDisk]
     "Dll"="ipoddsk.dll"
     "Prefix"="DSK"
@@ -75,30 +75,34 @@ ENDIF BSP_NODISPLAY !
     "Ioctl"=dword:4
     "IClass"=multi_sz:"{A4E7EDDA-E575-4252-9D6B-4195D48BB865}"
     "Profile"="iPodDisk"
-    "FriendlyName"="iPod disk (read only)"
+    "FriendlyName"="iPod disk"
+    ; 1 = Windows may write to the iPod's FAT32 volume (DMA writes; the disk's
+    ; cache is flushed 2 s after the last write and on Windows' flush request).
+    ; 0 = read only: the driver refuses to be opened for writing, so the
+    ; storage manager opens the store read only (creating a file: error 5).
+    ; BACK UP THE IPOD'S VOLUME BEFORE SETTING 1.
+    "AllowWrite"=dword:0
     ; 1 = reads by DMA (the controller's own bus master, the fastest mode the
     ; disk offers); 0 = PIO only, as before. A failed DMA read is redone in PIO.
     "UseDma"=dword:1
-    ; DMA reads end on the ATA interrupt: 0x12 = SYSINTR_ATA (bsp_cfg.h, IRQ 29).
+    ; DMA transfers end on the ATA interrupt: 0x12 = SYSINTR_ATA (bsp_cfg.h, IRQ 29).
     ; 0 = completion polled.
     "SysIntr"=dword:12
 
 ; How the storage manager treats that disk: mount what is there under \iPod,
-; never partition, never format. "Attrib" 1 = a read-only store: that is the
-; value the storage manager itself looks at (its storedisk.cpp), so programs
-; are told "write protected" by Windows instead of finding out from the
-; driver's refusal.
+; never partition, never format. Read only or not is the driver's
+; AllowWrite above (no "Attrib" here: 1 would make it read only always).
 [HKEY_LOCAL_MACHINE\System\StorageManager\Profiles\iPodDisk]
     "Name"="iPod disk"
     "Folder"="iPod"
     "AutoMount"=dword:1
     "AutoPart"=dword:0
     "AutoFormat"=dword:0
-    "Attrib"=dword:1
 
 ; The FAT file system on it: no scan, no format, no reading ahead of the file
 ; allocation table at mount (tens of MB on a big card), and small caches (sectors are 4096 bytes:
-; 64 = 256 KB, 128 = 512 KB).
+; 64 = 256 KB, 128 = 512 KB). EnableWriteBack 0: FATFS writes through, so
+; what it has written is on the disk (in the disk's cache until the flush).
 [HKEY_LOCAL_MACHINE\System\StorageManager\Profiles\iPodDisk\FATFS]
     "DisableAutoScan"=dword:1
     "DisableAutoFormat"=dword:1

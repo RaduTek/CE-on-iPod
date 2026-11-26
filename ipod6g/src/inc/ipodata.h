@@ -1,5 +1,5 @@
 //
-// ipodata.h - reading the iPod's disk under Windows CE: the hardware layer
+// ipodata.h - reading and writing the iPod's disk under Windows CE: the hardware layer
 // (ipodata.c) and the status it keeps (the iPod disk panel shows it)
 //
 #ifndef IPODATA_H
@@ -11,7 +11,7 @@
 extern "C" {
 #endif
 
-#define IPODATA_VERSION         3
+#define IPODATA_VERSION         4
 #define IPODATA_SECTOR_BYTES    512
 #define IPODATA_MAX_SECTORS     128     // per read call (64 KB, the DMA buffer)
 
@@ -49,6 +49,12 @@ extern "C" {
 #define IPODATA_STEP_RD_DATA    7       // read: waiting for / taking the data
 #define IPODATA_STEP_RD_END     8       // read: after the last sector
 #define IPODATA_STEP_RD_DMA     10      // read: the DMA transfer
+#define IPODATA_STEP_WR_READY   11      // write: waiting for the disk to be ready
+#define IPODATA_STEP_WR_CMD     12      // write: sending the command
+#define IPODATA_STEP_WR_DATA    13      // write: waiting for / giving the data (PIO)
+#define IPODATA_STEP_WR_DMA     14      // write: the DMA transfer
+#define IPODATA_STEP_WR_END     15      // write: after the last sector
+#define IPODATA_STEP_FLUSH      16      // flush cache
 
 typedef struct {
     DWORD   version;
@@ -114,6 +120,20 @@ typedef struct {
     DWORD   intrMissed;     // ... where the transfer was done but no interrupt came in time
     DWORD   intrSpurious;   // the event fired with the transfer not done
 
+    // writes and flushes
+    DWORD   writes;         // write calls
+    DWORD   sectorsWritten;
+    DWORD   dmaWrites;      // ... done by DMA
+    DWORD   writeRetries;   // DMA writes that failed and were done again in PIO
+    DWORD   lastWriteMs;
+    DWORD   flushCmd;       // the disk's flush command (E7/EA), 0 = it has none
+    DWORD   flushes;        // flush commands sent
+    DWORD   flushErrors;
+    DWORD   lastFlushMs;
+    DWORD   word80;         // ATA versions
+    DWORD   word82;         // features supported (bit 5: write cache)
+    DWORD   word85;         // features enabled (bit 5: write cache on)
+
     // registers now
     DWORD   control;
     DWORD   cfg;
@@ -132,8 +152,17 @@ BOOL  IpodAta_Init(void);
 // reads stay PIO. 0 = ok (identify worked).
 DWORD IpodAta_Attach(BOOL useDma);
 
-// Reads count sectors of 512 bytes. 0 = ok. There is no write function.
+// Reads count sectors of 512 bytes. 0 = ok.
 DWORD IpodAta_Read(DWORD lbaLow, DWORD lbaHigh, DWORD count, BYTE *pOut);
+
+// Writes count sectors of 512 bytes. 0 = ok. Nothing here decides whether
+// writing is allowed: ipoddsk.c does (registry AllowWrite) and calls this
+// only then.
+DWORD IpodAta_Write(DWORD lbaLow, DWORD lbaHigh, DWORD count, const BYTE *pIn);
+
+// Has the disk write its cache to the platter (FLUSH CACHE / FLUSH CACHE
+// EXT). 0 = ok, also when the disk has no such command.
+DWORD IpodAta_Flush(void);
 
 // DMA reads wait for the ATA interrupt on sysIntr (SYSINTR_ATA) instead of
 // polling. Quiets the controller's interrupt sources first. FALSE = it

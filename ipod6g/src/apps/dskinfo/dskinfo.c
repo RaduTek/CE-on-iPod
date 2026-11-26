@@ -6,25 +6,33 @@
 // file system), and what is in the mounted folder. "Verify file" reads
 // \iPod\wince.ipod (the Windows CE image, about 21 MB) to its
 // end and checks it against the checksum in its own header: a read through
-// partition table, FAT and data area that proves itself. Nothing here
-// writes.
+// partition table, FAT and data area that proves itself.
+//
+// "Write test" (only does anything with the driver's AllowWrite 1): writes
+// \iPod\cetest.bin (4 MB of a pattern that differs every time), flushes it
+// and the disk's cache, reads it back and compares, then deletes it. A
+// mismatch leaves the file there to be looked at. With writing off it
+// shows the error Windows gives (5, access denied).
 //
 #include <windows.h>
 #include <winioctl.h>
 #include <storemgr.h>
+#include <diskio.h>
 
 #include <ipoddsk.h>
 #include <panelkeys.h>
 
 #define IDC_REFRESH     101
 #define IDC_VERIFY      102
+#define IDC_WRITETEST   103
+#define TEST_CHUNKS     64              // x CHUNK = 4 MB
 #define LINE_H          12
 #define BTN_H           22
 #define CHUNK           65536
 #define MODEL_NUMBER    71              // "ip6g" in the image header's checksum
 
 static HWND     g_hWnd, g_hRefresh;
-static HWND     g_hButtons[2];          // in Tab order, for panelkeys.h
+static HWND     g_hButtons[3];          // in Tab order, for panelkeys.h
 static HFONT    g_hFont;
 static HANDLE   g_hDev = INVALID_HANDLE_VALUE;
 static DWORD    g_devErr = 0;
@@ -33,6 +41,7 @@ static BOOL     g_haveSt = FALSE;
 
 static WCHAR    g_folder[MAX_PATH];     // the mounted folder, e.g. \iPod
 static WCHAR    g_verify[160];          // result of the last "Verify file"
+static WCHAR    g_wtest[160];           // result of the last "Write test"
 static BYTE     g_chunk[CHUNK];
 
 static void Fetch(void)
@@ -138,6 +147,110 @@ static void VerifyFile(void)
                  total, ms / 1000, (ms % 1000) / 100, ms ? total / ms : 0,
                  (sum == want && total > 8) ? L"OK" : L"WRONG");
     CloseHandle(h);
+}
+
+// The test pattern: chunk c of the file, for this run's seed.
+static void FillPattern(DWORD c, DWORD seed)
+{
+    DWORD *p = (DWORD *)g_chunk, i, n = CHUNK / 4;
+
+    for (i = 0; i < n; i++)
+        p[i] = ((c * n + i) * 0x9E3779B1u) ^ seed;
+}
+
+// Writes a file, flushes it and the disk, reads it back, compares, deletes it.
+static void WriteTest(void)
+{
+    WCHAR path[MAX_PATH];
+    HANDLE h;
+    DWORD seed, c, got, t0, wms, fms, rms, bad = 0xFFFFFFFF, err, i;
+    BYTE *pBack;
+
+    FindFolder();
+    if (g_folder[0] == 0)
+    {
+        wcscpy(g_wtest, L"write test: no mounted folder");
+        return;
+    }
+    wsprintf(path, L"%s\\cetest.bin", g_folder);
+    seed = GetTickCount() | 1;
+
+    // write
+    h = CreateFile(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE)
+    {
+        err = GetLastError();
+        wsprintf(g_wtest, L"write test: cannot create %s (error %u%s)", path, err,
+                 (err == ERROR_WRITE_PROTECT || err == ERROR_ACCESS_DENIED) ? L", writing is off" : L"");
+        return;
+    }
+    t0 = GetTickCount();
+    for (c = 0; c < TEST_CHUNKS; c++)
+    {
+        FillPattern(c, seed);
+        if (!WriteFile(h, g_chunk, CHUNK, &got, NULL) || got != CHUNK)
+        {
+            err = GetLastError();
+            CloseHandle(h);
+            wsprintf(g_wtest, L"write test: WRITE FAILED after %u KB (error %u); %s left",
+                     c * CHUNK / 1024, err, path);
+            return;
+        }
+    }
+    FlushFileBuffers(h);
+    CloseHandle(h);
+    wms = GetTickCount() - t0;
+
+    // the disk's cache to the platter
+    t0 = GetTickCount();
+    err = 0;
+    if (g_hDev == INVALID_HANDLE_VALUE
+        || !DeviceIoControl(g_hDev, IOCTL_DISK_FLUSH_CACHE, NULL, 0, NULL, 0, &got, NULL))
+        err = GetLastError();
+    fms = GetTickCount() - t0;
+
+    // read back and compare (the file system keeps the last 512 KB or so in
+    // its own cache; the rest comes from the disk)
+    pBack = (BYTE *)LocalAlloc(LMEM_FIXED, CHUNK);
+    h = CreateFile(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (h == INVALID_HANDLE_VALUE || pBack == NULL)
+    {
+        wsprintf(g_wtest, L"write test: written, cannot read back (error %u); %s left", GetLastError(), path);
+        if (h != INVALID_HANDLE_VALUE)
+            CloseHandle(h);
+        if (pBack != NULL)
+            LocalFree(pBack);
+        return;
+    }
+    t0 = GetTickCount();
+    for (c = 0; c < TEST_CHUNKS && bad == 0xFFFFFFFF; c++)
+    {
+        if (!ReadFile(h, pBack, CHUNK, &got, NULL) || got != CHUNK)
+        {
+            bad = c * CHUNK;
+            break;
+        }
+        FillPattern(c, seed);
+        if (memcmp(pBack, g_chunk, CHUNK) != 0)
+        {
+            for (i = 0; i < CHUNK && pBack[i] == g_chunk[i]; i++)
+                ;
+            bad = c * CHUNK + i;
+        }
+    }
+    rms = GetTickCount() - t0;
+    CloseHandle(h);
+    LocalFree(pBack);
+
+    if (bad != 0xFFFFFFFF)
+    {
+        wsprintf(g_wtest, L"write test: MISMATCH at byte %u of %u; %s left", bad, TEST_CHUNKS * CHUNK, path);
+        return;
+    }
+    DeleteFile(path);
+    wsprintf(g_wtest, L"write OK: %u KB, write %u KB/s, flush %u ms%s, read %u KB/s",
+             TEST_CHUNKS * CHUNK / 1024, wms ? TEST_CHUNKS * CHUNK / wms : 0,
+             fms, err ? L" FAILED" : L"", rms ? TEST_CHUNKS * CHUNK / rms : 0);
 }
 
 static void Line(HDC hdc, int *py, const WCHAR *text)
@@ -293,23 +406,18 @@ static void Paint(HDC hdc)
         wsprintf(sz, L"reads %u, sectors %u, %u ms (longest %u), errors %u, bad %u",
                  g_st.reads, g_st.sectorsRead, g_st.readMs, g_st.maxReadMs, g_st.readErrors, g_st.badRequests);
         Line(hdc, &y, sz);
-        wsprintf(sz, L"last read %u +%u; REFUSED: writes %u, formats %u",
-                 g_st.lastStart, g_st.lastCount, g_st.writesRefused, g_st.formatsRefused);
-        Line(hdc, &y, sz);
-        wsprintf(sz, L"asked: info %u dev %u name %u set %u init %u flush %u other %u (%X)",
-                 g_st.getInfos, g_st.deviceInfos, g_st.getNames, g_st.setInfos, g_st.initializeds,
-                 g_st.flushes, g_st.others, g_st.lastOther);
-        Line(hdc, &y, sz);
-        wsprintf(sz, L"transfer %s %u (asked %u, set err %u): DMA reads %u, timeouts %u",
+        wsprintf(sz, L"%s %u: DMA r %u w %u, timeouts %u; irq %u: woke %u miss %u spur %u",
                  (g_st.ata.dmaMode & 0x40) ? L"UDMA" : (g_st.ata.dmaMode & 0x20) ? L"MWDMA" : L"PIO",
-                 g_st.ata.dmaMode & 0x0F, g_st.ata.dmaWanted, g_st.ata.modeError,
-                 g_st.ata.dmaReads, g_st.ata.dmaTimeouts);
+                 g_st.ata.dmaMode & 0x0F, g_st.ata.dmaReads, g_st.ata.dmaWrites, g_st.ata.dmaTimeouts,
+                 g_st.ata.sysIntr, g_st.ata.intrWakes, g_st.ata.intrMissed, g_st.ata.intrSpurious);
         Line(hdc, &y, sz);
-        if (g_st.ata.sysIntr)
-            wsprintf(sz, L"  interrupt %u: woke %u, missed %u, spurious %u",
-                     g_st.ata.sysIntr, g_st.ata.intrWakes, g_st.ata.intrMissed, g_st.ata.intrSpurious);
-        else
-            wsprintf(sz, L"  DMA completion polled (interrupt error %u)", g_st.ata.intrError);
+        wsprintf(sz, L"writes %s: %u, sectors %u, %u ms, errors %u, PIO retries %u",
+                 g_st.allowWrite ? L"ALLOWED" : L"off", g_st.writes, g_st.sectorsWritten, g_st.writeMs,
+                 g_st.writeErrors, g_st.ata.writeRetries);
+        Line(hdc, &y, sz);
+        wsprintf(sz, L"flush %02X: asked %u sent %u failed %u pend %u %u ms; refused w %u o %u f %u",
+                 g_st.ata.flushCmd, g_st.flushes, g_st.flushesDone, g_st.flushErrors, g_st.flushPending,
+                 g_st.ata.lastFlushMs, g_st.writesRefused, g_st.opensRefused, g_st.formatsRefused);
         Line(hdc, &y, sz);
         if (g_st.ata.errors || !g_st.ready)
         {
@@ -324,6 +432,8 @@ static void Paint(HDC hdc)
     PaintFolder(hdc, &y);
     if (g_verify[0])
         Line(hdc, &y, g_verify);
+    if (g_wtest[0])
+        Line(hdc, &y, g_wtest);
 
     SelectObject(hdc, hOld);
 }
@@ -340,20 +450,28 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
     case WM_CREATE:
         hInst = ((LPCREATESTRUCT)lParam)->hInstance;
         g_hRefresh = CreateWindow(L"BUTTON", L"Refresh", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                                  4, 2, 80, BTN_H, hWnd, (HMENU)IDC_REFRESH, hInst, NULL);
+                                  4, 2, 64, BTN_H, hWnd, (HMENU)IDC_REFRESH, hInst, NULL);
         g_hButtons[0] = g_hRefresh;
-        g_hButtons[1] = CreateWindow(L"BUTTON", L"Verify file (15 s)", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                                     90, 2, 130, BTN_H, hWnd, (HMENU)IDC_VERIFY, hInst, NULL);
+        g_hButtons[1] = CreateWindow(L"BUTTON", L"Verify file", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                                     72, 2, 96, BTN_H, hWnd, (HMENU)IDC_VERIFY, hInst, NULL);
+        g_hButtons[2] = CreateWindow(L"BUTTON", L"Write test", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                                     172, 2, 96, BTN_H, hWnd, (HMENU)IDC_WRITETEST, hInst, NULL);
         return 0;
 
     case WM_COMMAND:
-        if (LOWORD(wParam) == IDC_VERIFY)
+        if (LOWORD(wParam) == IDC_VERIFY || LOWORD(wParam) == IDC_WRITETEST)
         {
-            wcscpy(g_verify, L"reading \\iPod\\wince.ipod to its end ...");
+            if (LOWORD(wParam) == IDC_VERIFY)
+                wcscpy(g_verify, L"reading \\iPod\\wince.ipod to its end ...");
+            else
+                wcscpy(g_wtest, L"writing, reading back and deleting \\iPod\\cetest.bin ...");
             InvalidateRect(hWnd, NULL, FALSE);
             UpdateWindow(hWnd);
             hOld = SetCursor(LoadCursor(NULL, IDC_WAIT));
-            VerifyFile();
+            if (LOWORD(wParam) == IDC_VERIFY)
+                VerifyFile();
+            else
+                WriteTest();
             SetCursor(hOld);
         }
         Fetch();
@@ -430,7 +548,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     // the buttons' keys first (Tab/arrows move, Enter/Space press: panelkeys.h)
     while (GetMessage(&msg, NULL, 0, 0))
     {
-        if (PanelKeys_Handle(g_hWnd, g_hButtons, 2, &msg))
+        if (PanelKeys_Handle(g_hWnd, g_hButtons, 3, &msg))
             continue;
         TranslateMessage(&msg);
         DispatchMessage(&msg);

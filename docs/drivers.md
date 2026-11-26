@@ -56,22 +56,34 @@ the click wheel in particular will need their own set-up there (see each
   sound). Registry `TestTone` 1 plays 440 Hz left then 880 Hz right at
   start-up and logs how the ring's interrupts came (`test tone done: ...`).
 
-## Disk, read only: `ipoddsk.dll` (`src\drivers\ipoddsk`)
+## Disk: `ipoddsk.dll` (`src\drivers\ipoddsk`)
 
 - `DSK1:`, a block device for the storage manager, on top of `ipodata.c`:
-  the S5L8702's ATA controller, reads by DMA (the controller's own bus master,
-  fastest UDMA/MWDMA mode the disk offers; a failed DMA read is reset and
-  redone in PIO). Registry `UseDma` 0 = PIO only. The end of a transfer
+  the S5L8702's ATA controller, reads and writes by DMA (the controller's own
+  bus master, fastest UDMA/MWDMA mode the disk offers; a failed DMA transfer
+  is reset and redone in PIO). Registry `UseDma` 0 = PIO only. The end of a transfer
   wakes the reader through `SYSINTR_ATA` (0x12, IRQ 29; registry `SysIntr`,
   0 = polled); the controller's interrupt sources are quieted before the
   line is enabled, and cleared before every `InterruptDone`.
   PIO: about 1.9 MB/s raw, 1.8 MB/s through the file system (iFlash).
   DMA (UDMA 4): 6720 KB/s through the file system ("Verify file", 80 GB
-  iPod, 2026-11-26), 3.7 times PIO.
-- Read only twice over: `ipodata.c` has no write command at all, and every
-  write, format and delete request is refused before it is called. The
-  storage manager is told the store is read only (`Attrib` 1), so programs
-  get "write protected" from Windows.
+  iPod, 2026-11-26), 3.7 times PIO; 9170 KB/s on the 128 GB iFlash.
+  Writes (iFlash, "Write test", 4 MB): 11428 KB/s into the disk's cache,
+  flush 3 ms, read back 10255 KB/s.
+- **Read only unless the driver's registry `AllowWrite` is 1** (default 0).
+  Off: `DSK_Open` refuses write access with `ERROR_ACCESS_DENIED`, so the
+  storage manager opens the store read only and marks it so (fsdmgr
+  `storedisk.cpp`; the device manager passes the driver's error on,
+  `devfile.c`); creating a file fails with error 5 (access denied; the
+  store and partition info do not show a read-only attribute), and write
+  requests are refused before the hardware layer. On: writes go to the disk; its own
+  write cache stays on, and FLUSH CACHE (EXT) is sent 2 s after the last
+  write (a thread), on `IOCTL_DISK_FLUSH_CACHE`, and by `restart.exe`
+  before it resets. Format, delete and wipe requests are always refused.
+  Writes cannot leave the FAT32 volume (range check against the size shown).
+  With writing on, FATFS marks the volume in use while mounted and nothing
+  unmounts it before a reset, so a PC may offer to check the disk (expected,
+  not verified).
 - The disk answers in 512-byte sectors, but an iTunes-formatted iPod has a
   FAT32 file system in 4096-byte sectors: at start-up the driver finds the
   FAT32 volume (`dskparse.h`) and shows Windows a disk of the sector size
@@ -90,12 +102,14 @@ the click wheel in particular will need their own set-up there (see each
   enabled (Rockbox has just read the image from it). PATA only: a CE-ATA
   disk (later models) is refused with its own error code (written from
   Rockbox's sources; no CE-ATA iPod was at hand to try).
-- **Does not:** power the disk; it sends only the transfer mode (SET
-  FEATURES 0x03) and a software reset after a failed DMA read; no sleep.
-- **Check:** "iPod disk" on the desktop (the volume found, reads and
-  refused writes, the last error and the step it happened at, the stores
-  Windows lists; "Verify file" reads `\iPod\wince.ipod` to its end and
-  checks its checksum and speed).
+- **Does not:** power the disk; besides reads, writes and flushes it sends
+  only the transfer mode (SET FEATURES 0x03) and a software reset after a
+  failed DMA transfer; no sleep or standby.
+- **Check:** "iPod disk" on the desktop (the volume found, reads, writes,
+  flushes and refusals, the last error and the step it happened at, the
+  stores Windows lists; "Verify file" reads `\iPod\wince.ipod` to its end
+  and checks its checksum and speed; "Write test" writes 4 MB to
+  `\iPod\cetest.bin`, flushes, reads it back, compares and deletes it).
 
 ## I2C bus 0: `ipodi2c.dll` (`src\drivers\ipodi2c`)
 

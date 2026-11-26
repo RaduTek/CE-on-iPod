@@ -1,16 +1,22 @@
 //
-// ipoddsk.c - the iPod's disk as a Windows CE block device, READ ONLY
+// ipoddsk.c - the iPod's disk as a Windows CE block device
 //
 // Stream driver "DSK1:", kernel mode, for the storage manager: it answers
 // the disk requests of diskio.h on top of ipodata.c, the hardware layer
-// (plain PIO reads, about 1.9 MB/s on the iPod).
+// (DMA, about 6.7 MB/s through the file system).
 //
-// READ ONLY, twice over:
-//   - ipodata.c has no write function and can send the disk nothing but
-//     "identify" and "read sectors";
-//   - every write, format, delete and wipe request ends in this file with
-//     ERROR_WRITE_PROTECT before the hardware layer is called at all, and
-//     the device tells the storage manager it is read only.
+// Writing is OFF unless the driver's registry key says "AllowWrite"=1:
+//   - off: opening DSK1: for writing fails with ERROR_ACCESS_DENIED, so the
+//     storage manager opens the store read only and marks it so (its
+//     storedisk.cpp); creating a file fails with error 5, access denied
+//     (seen 2026-11-26; the store info does not show it read only); every write
+//     request is refused here before the hardware layer is called, and the
+//     device info says read only;
+//   - on: write requests go to IpodAta_Write. The disk keeps its own write
+//     cache on; FLUSH CACHE is sent on Windows' flush request
+//     (IOCTL_DISK_FLUSH_CACHE, e.g. restart.exe before a reset) and by a
+//     thread FLUSH_DELAY_MS after the last write.
+// Format, delete and wipe requests are always refused.
 //
 // The sector size. The disk answers in blocks of 512 bytes, but an iPod
 // that iTunes formatted has a partition table and a FAT32 file system that
@@ -50,13 +56,18 @@ static DWORD            g_shift;        // log2 of g_ds.factor
 static ULONGLONG        g_base;         // disk block (512 bytes) of Windows' sector 0
 static BYTE             g_bounce[IPODATA_MAX_SECTORS * IPODATA_SECTOR_BYTES];
 
-// a read request as it is used here: copied out of the caller's memory once
+#define FLUSH_DELAY_MS  2000            // the disk's cache is flushed this long after the last write
+static BOOL             g_allowWrite;   // registry AllowWrite, read once at load
+static HANDLE           g_hWritten;     // set after each write: wakes the flush thread
+static volatile DWORD   g_lastWriteTick;
+
+// a read or write request as it is used here: copied out of the caller's memory once
 typedef struct {
     DWORD   start;
     DWORD   count;
     DWORD   numSg;
     SG_BUF  sg[MAX_SG_BUF];
-} READ_REQ;
+} XFER_REQ;
 
 //------------------------------------------------------------------------------
 // start-up: who is the disk, and in what sector size does its table count
@@ -182,11 +193,12 @@ static void Setup(BOOL useDma)
 }
 
 //------------------------------------------------------------------------------
-// one read request
+// one read or write request
 //
 // Copies the request out of the caller's memory and checks it. Returns a
-// Win32 error code.
-static DWORD TakeRequest(const BYTE *pIn, DWORD lenIn, READ_REQ *pReq)
+// Win32 error code. The range check keeps every transfer inside what
+// Windows is shown (the FAT32 volume).
+static DWORD TakeRequest(const BYTE *pIn, DWORD lenIn, XFER_REQ *pReq)
 {
     const SG_REQ *pSg = (const SG_REQ *)pIn;
     DWORD i, bytes = 0, need;
@@ -238,11 +250,13 @@ static void PutStatus(BYTE *pIn, DWORD status)
     }
 }
 
-static DWORD DoRead(BYTE *pIn, DWORD lenIn)
+// A read (write FALSE) or write request. The caller has checked that
+// writing is allowed.
+static DWORD DoTransfer(BYTE *pIn, DWORD lenIn, BOOL write)
 {
-    READ_REQ req;
+    XFER_REQ req;
     PUCHAR mapped[MAX_SG_BUF];
-    DWORD status, i, opened = 0, t0, ms;
+    DWORD status, i, opened = 0, t0, ms, argType = write ? ARG_I_PTR : ARG_O_PTR;
     DWORD lbaLow, lbaHigh, left, n, got, sgIndex = 0, sgOff = 0;
     ULONGLONG lba;
 
@@ -262,7 +276,7 @@ static DWORD DoRead(BYTE *pIn, DWORD lenIn)
     for (opened = 0; opened < req.numSg; opened++)
     {
         if (FAILED(CeOpenCallerBuffer((PVOID *)&mapped[opened], req.sg[opened].sb_buf,
-                                      req.sg[opened].sb_len, ARG_O_PTR, FALSE)))
+                                      req.sg[opened].sb_len, argType, FALSE)))
         {
             status = ERROR_INVALID_PARAMETER;
             g_ds.badRequests++;
@@ -283,14 +297,13 @@ static DWORD DoRead(BYTE *pIn, DWORD lenIn)
         {
             n = (left > IPODATA_MAX_SECTORS) ? IPODATA_MAX_SECTORS : left;
 
-            // one command to the disk, and its data handed on, per turn of the lock
+            // one command to the disk, and its data handed over, per turn of the lock
             EnterCriticalSection(&g_cs);
-            if (IpodAta_Read(lbaLow, lbaHigh, n, g_bounce) != IPODATA_OK)
-            {
+            if (!write && IpodAta_Read(lbaLow, lbaHigh, n, g_bounce) != IPODATA_OK)
                 status = ERROR_READ_FAULT;
-            }
-            else
+            if (status == ERROR_SUCCESS)
             {
+                // between the caller's buffers and g_bounce, in the direction of the transfer
                 __try
                 {
                     got = 0;
@@ -300,7 +313,10 @@ static DWORD DoRead(BYTE *pIn, DWORD lenIn)
 
                         if (part > n * IPODATA_SECTOR_BYTES - got)
                             part = n * IPODATA_SECTOR_BYTES - got;
-                        memcpy(mapped[sgIndex] + sgOff, g_bounce + got, part);
+                        if (write)
+                            memcpy(g_bounce + got, mapped[sgIndex] + sgOff, part);
+                        else
+                            memcpy(mapped[sgIndex] + sgOff, g_bounce + got, part);
                         got += part;
                         sgOff += part;
                         if (sgOff == req.sg[sgIndex].sb_len)
@@ -315,6 +331,15 @@ static DWORD DoRead(BYTE *pIn, DWORD lenIn)
                     status = ERROR_INVALID_PARAMETER;
                 }
             }
+            if (write && status == ERROR_SUCCESS)
+            {
+                // before the write: a flush started now still covers it, as
+                // the flush thread waits for the lock this write holds
+                g_ds.flushPending = 1;
+                g_lastWriteTick = GetTickCount();
+                if (IpodAta_Write(lbaLow, lbaHigh, n, g_bounce) != IPODATA_OK)
+                    status = ERROR_WRITE_FAULT;
+            }
             LeaveCriticalSection(&g_cs);
 
             lbaLow += n;
@@ -324,7 +349,22 @@ static DWORD DoRead(BYTE *pIn, DWORD lenIn)
         }
 
         ms = GetTickCount() - t0;
-        if (status == ERROR_SUCCESS)
+        if (write)
+        {
+            if (status == ERROR_SUCCESS)
+            {
+                g_ds.writes++;
+                g_ds.sectorsWritten += req.count;
+                g_ds.writeMs += ms;
+            }
+            else if (status == ERROR_WRITE_FAULT)
+            {
+                g_ds.writeErrors++;
+            }
+            if (g_hWritten != NULL)
+                SetEvent(g_hWritten);       // the flush thread: flush in FLUSH_DELAY_MS
+        }
+        else if (status == ERROR_SUCCESS)
         {
             g_ds.reads++;
             g_ds.sectorsRead += req.count;
@@ -341,10 +381,56 @@ static DWORD DoRead(BYTE *pIn, DWORD lenIn)
     }
 
     for (i = 0; i < opened; i++)
-        CeCloseCallerBuffer(mapped[i], req.sg[i].sb_buf, req.sg[i].sb_len, ARG_O_PTR);
+        CeCloseCallerBuffer(mapped[i], req.sg[i].sb_buf, req.sg[i].sb_len, argType);
 
     PutStatus(pIn, status);
     return status;
+}
+
+//------------------------------------------------------------------------------
+// the disk's write cache
+//
+// Flushes it if anything was written since the last flush. Returns a Win32
+// error code.
+static DWORD DoFlush(void)
+{
+    DWORD status = ERROR_SUCCESS;
+
+    EnterCriticalSection(&g_cs);
+    if (g_ds.flushPending)
+    {
+        g_ds.flushPending = 0;
+        g_ds.flushesDone++;
+        if (IpodAta_Flush() != IPODATA_OK)
+        {
+            g_ds.flushPending = 1;          // try again next time
+            g_ds.flushErrors++;
+            status = ERROR_WRITE_FAULT;
+        }
+    }
+    LeaveCriticalSection(&g_cs);
+    return status;
+}
+
+// Flushes FLUSH_DELAY_MS after the last write, so the cache is not left
+// full while nothing else happens.
+static DWORD WINAPI FlushThread(LPVOID pArg)
+{
+    DWORD idle;
+
+    UNREFERENCED_PARAMETER(pArg);
+    for (;;)
+    {
+        WaitForSingleObject(g_hWritten, INFINITE);
+        for (;;)
+        {
+            idle = GetTickCount() - g_lastWriteTick;
+            if (idle >= FLUSH_DELAY_MS)
+                break;
+            Sleep(FLUSH_DELAY_MS - idle);
+        }
+        DoFlush();
+    }
 }
 
 //------------------------------------------------------------------------------
@@ -382,16 +468,19 @@ static BOOL Refuse(DWORD *pCounter, DWORD error)
 DWORD DSK_Init(LPCTSTR pContext, DWORD dwBusContext)
 {
     HKEY hKey;
-    DWORD useDma, sysIntr;
+    DWORD useDma, sysIntr, allowWrite;
     IPODATA_STATUS st;
+    HANDLE hThread;
 
     UNREFERENCED_PARAMETER(dwBusContext);
 
     // the driver's own registry key: "UseDma" 0 = PIO only (default 1);
-    // "SysIntr" for DMA completion (default SYSINTR_ATA), 0 = polled
+    // "SysIntr" for DMA completion (default SYSINTR_ATA), 0 = polled;
+    // "AllowWrite" 1 = writes reach the disk (default 0: read only)
     hKey = OpenDeviceKey(pContext);
     useDma = RegDword(hKey, L"UseDma", 1);
     sysIntr = RegDword(hKey, L"SysIntr", SYSINTR_ATA);
+    allowWrite = RegDword(hKey, L"AllowWrite", 0);
     if (hKey != NULL)
         RegCloseKey(hKey);
 
@@ -405,6 +494,22 @@ DWORD DSK_Init(LPCTSTR pContext, DWORD dwBusContext)
     IpodAta_GetStatus(&st);
     if (st.dmaMode != IPODATA_MODE_PIO && sysIntr != 0)
         IpodAta_UseInterrupt(sysIntr);
+
+    // writing: only with the flush thread running, so the cache is not left unflushed
+    g_allowWrite = FALSE;
+    if (allowWrite == 1 && g_ds.ready)
+    {
+        g_hWritten = CreateEvent(NULL, FALSE, FALSE, NULL);
+        hThread = (g_hWritten != NULL) ? CreateThread(NULL, 0, FlushThread, NULL, 0, NULL) : NULL;
+        if (hThread != NULL)
+        {
+            CloseHandle(hThread);
+            g_allowWrite = TRUE;
+        }
+    }
+    g_ds.allowWrite = g_allowWrite ? 1 : 0;
+    RETAILMSG(1, (L"ipoddsk: writing %s (registry AllowWrite %u)\r\n",
+                  g_allowWrite ? L"ALLOWED" : L"off, read only", allowWrite));
     return 1;                   // stay loaded in any case, so the panel can say what is wrong
 }
 
@@ -416,8 +521,17 @@ BOOL DSK_Deinit(DWORD hDeviceContext)
 
 DWORD DSK_Open(DWORD hDeviceContext, DWORD AccessCode, DWORD ShareMode)
 {
-    UNREFERENCED_PARAMETER(AccessCode);
     UNREFERENCED_PARAMETER(ShareMode);
+
+    // The storage manager opens the store for reading and writing first; on
+    // ERROR_ACCESS_DENIED it opens it for reading only and marks the store
+    // read only (fsdmgr storedisk.cpp). The device manager passes the code on.
+    if (!g_allowWrite && (AccessCode & GENERIC_WRITE))
+    {
+        g_ds.opensRefused++;
+        SetLastError(ERROR_ACCESS_DENIED);
+        return 0;
+    }
     return hDeviceContext;
 }
 
@@ -465,17 +579,23 @@ BOOL DSK_IOControl(DWORD hOpenContext, DWORD dwCode, PBYTE pBufIn, DWORD dwLenIn
     {
     case IOCTL_DISK_READ:
     case DISK_IOCTL_READ:
-        status = DoRead(pBufIn, dwLenIn);
+        status = DoTransfer(pBufIn, dwLenIn, FALSE);
+        SetLastError(status);
+        return status == ERROR_SUCCESS;
+
+    case IOCTL_DISK_WRITE:
+    case DISK_IOCTL_WRITE:
+        if (!g_allowWrite)
+        {
+            if (pBufIn != NULL && dwLenIn >= sizeof(SG_REQ))
+                PutStatus(pBufIn, ERROR_WRITE_PROTECT);
+            return Refuse(&g_ds.writesRefused, ERROR_WRITE_PROTECT);
+        }
+        status = DoTransfer(pBufIn, dwLenIn, TRUE);
         SetLastError(status);
         return status == ERROR_SUCCESS;
 
     // Nothing below this line and above the next one touches the disk.
-    case IOCTL_DISK_WRITE:
-    case DISK_IOCTL_WRITE:
-        if (pBufIn != NULL && dwLenIn >= sizeof(SG_REQ))
-            PutStatus(pBufIn, ERROR_WRITE_PROTECT);
-        return Refuse(&g_ds.writesRefused, ERROR_WRITE_PROTECT);
-
     case IOCTL_DISK_FORMAT_MEDIA:
     case DISK_IOCTL_FORMAT_MEDIA:
     case IOCTL_DISK_DELETE_SECTORS:
@@ -527,15 +647,17 @@ BOOL DSK_IOControl(DWORD hOpenContext, DWORD dwCode, PBYTE pBufIn, DWORD dwLenIn
         wcscpy(sdi.szProfile, IPODDSK_PROFILE);
         sdi.dwDeviceClass = STORAGE_DEVICE_CLASS_BLOCK;
         sdi.dwDeviceType = STORAGE_DEVICE_TYPE_ATA;
-        sdi.dwDeviceFlags = STORAGE_DEVICE_FLAG_READONLY;
+        sdi.dwDeviceFlags = g_allowWrite ? STORAGE_DEVICE_FLAG_READWRITE : STORAGE_DEVICE_FLAG_READONLY;
         // asked through the input buffer; through the output buffer by some
         if (pBufIn != NULL && dwLenIn == sizeof(sdi))
             return CopyOut(pBufIn, dwLenIn, &sdi, sizeof(sdi), pdwActualOut);
         return CopyOut(pBufOut, dwLenOut, &sdi, sizeof(sdi), pdwActualOut);
 
-    case IOCTL_DISK_FLUSH_CACHE:        // nothing is ever held back
+    case IOCTL_DISK_FLUSH_CACHE:        // the disk's cache, if anything was written
         g_ds.flushes++;
-        return TRUE;
+        status = DoFlush();
+        SetLastError(status);
+        return status == ERROR_SUCCESS;
 
     case IOCTL_IPODDSK_GET_STATUS:
         EnterCriticalSection(&g_cs);
