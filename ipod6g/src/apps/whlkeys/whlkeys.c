@@ -7,8 +7,11 @@
 //
 //   wheel            Down (clockwise) and Up, 24 to a turn
 //   centre           Enter (held as long as the button is)
-//   MENU             Escape; held for 0.6 s: the Windows key (Start menu)
-//   play/pause       the keyboard key "play/pause"
+//   MENU             Escape; held for 0.6 s: closes the window in front
+//                    instead (WM_CLOSE; CE 7 ignores Alt+F4, tried); never
+//                    the desktop or the taskbar
+//   play/pause       the keyboard key "play/pause" (sent when let go);
+//                    held for 0.6 s: the Windows key (Start menu) instead
 //   next, previous   the keyboard keys "next track", "previous track"
 //
 // Navigation mode (registry HKLM\Software\iPod\WheelKeys, "Navigation" = 1,
@@ -17,9 +20,7 @@
 //
 //   next, previous   Tab, Shift+Tab (the next / previous control)
 //   play/pause       switches the wheel between Down/Up and Right/Left
-//                    (clockwise = Right); held for 0.6 s: closes the
-//                    window in front instead (WM_CLOSE; CE 7 ignores
-//                    Alt+F4, tried); never the desktop or the taskbar
+//                    (clockwise = Right); held: Start menu as above
 //   wheel, centre, MENU as above
 //
 // A program in front can ask for the wheel to be the volume instead (as an
@@ -194,12 +195,7 @@ static DWORD WINAPI ReaderThread(LPVOID pv)
                     }
                     break;
                 case WHL_BTN_PLAY:
-                    if (!g_navigation)
-                    {
-                        if (ev[i].b)
-                            Tap(VK_MEDIA_PLAY_PAUSE);
-                    }
-                    else if (ev[i].b)
+                    if (ev[i].b)
                     {
                         playDown = TRUE;
                         playFired = FALSE;
@@ -207,9 +203,15 @@ static DWORD WINAPI ReaderThread(LPVOID pv)
                     }
                     else
                     {
-                        // a short press (not held into a close): the wheel's other axis
+                        // a short press (not held into the Start menu): play/pause,
+                        // or in navigation mode the wheel's other axis
                         if (playDown && !playFired)
-                            g_sideways = !g_sideways;
+                        {
+                            if (g_navigation)
+                                g_sideways = !g_sideways;
+                            else
+                                Tap(VK_MEDIA_PLAY_PAUSE);
+                        }
                         playDown = FALSE;
                     }
                     break;
@@ -234,16 +236,16 @@ static DWORD WINAPI ReaderThread(LPVOID pv)
                 }
             }
         }
-        // MENU held long enough: the Start menu, once
+        // MENU held long enough: close the window in front, once
         if (menuDown && !menuFired && GetTickCount() - menuTick >= MENU_HOLD_MS)
         {
-            Tap(VK_LWIN);
+            CloseFront();
             menuFired = TRUE;
         }
-        // navigation mode, play held long enough: close the window in front, once
+        // play held long enough: the Start menu, once
         if (playDown && !playFired && GetTickCount() - playTick >= PLAY_HOLD_MS)
         {
-            CloseFront();
+            Tap(VK_LWIN);
             playFired = TRUE;
         }
     }
@@ -322,15 +324,12 @@ static void Paint(HDC hdc)
     Line(hdc, &y, VolumeNow() ? L"the wheel is the volume" :
                   g_volumeMode ? L"the wheel is the arrow keys (volume asked for, asker not in front)" :
                   L"the wheel is the arrow keys");
-    Line(hdc, &y, !g_navigation ? L"buttons: media keys (Navigation 0)" :
-                  g_sideways ? L"navigation: Tab keys, wheel Right/Left (play switches, hold: close)" :
-                  L"navigation: Tab keys, wheel Down/Up (play switches, hold: close)");
-    if (g_navigation)
-    {
-        wsprintf(sz, L"hold play: %u closed, %u refused, last %s",
-                 g_closes, g_closeSkips, g_lastClosed[0] ? g_lastClosed : L"-");
-        Line(hdc, &y, sz);
-    }
+    Line(hdc, &y, !g_navigation ? L"buttons: media keys (Navigation 0); hold play: Start" :
+                  g_sideways ? L"navigation: Tab keys, wheel Right/Left (play switches, hold: Start)" :
+                  L"navigation: Tab keys, wheel Down/Up (play switches, hold: Start)");
+    wsprintf(sz, L"hold MENU: %u closed, %u refused, last %s",
+             g_closes, g_closeSkips, g_lastClosed[0] ? g_lastClosed : L"-");
+    Line(hdc, &y, sz);
     SelectObject(hdc, hOld);
 }
 
