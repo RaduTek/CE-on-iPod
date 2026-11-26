@@ -271,6 +271,23 @@ static void Paint(HDC hdc)
                  g_st.ready ? L"ready" : L"NOT READY", g_st.setupStep, g_st.fatFound ? L"found" : L"NOT found",
                  g_st.factor, g_st.totalSectors, g_st.bytesPerSector);
         Line(hdc, &y, sz);
+        if (g_st.version != IPODDSK_VERSION)
+        {
+            wsprintf(sz, L"driver version %u, panel %u: rebuild both", g_st.version, IPODDSK_VERSION);
+            Line(hdc, &y, sz);
+        }
+        wsprintf(sz, L"shown: %s; table: %02X %u+%u, %02X %u+%u",
+                 g_st.volumeOnly ? L"volume only" : L"whole disk",
+                 g_st.mbrType[0], g_st.mbrStart[0], g_st.mbrSize[0],
+                 g_st.mbrType[1], g_st.mbrStart[1], g_st.mbrSize[1]);
+        Line(hdc, &y, sz);
+        if (g_st.mbrSize[2] || g_st.mbrSize[3])
+        {
+            wsprintf(sz, L"  table: %02X %u+%u, %02X %u+%u",
+                     g_st.mbrType[2], g_st.mbrStart[2], g_st.mbrSize[2],
+                     g_st.mbrType[3], g_st.mbrStart[3], g_st.mbrSize[3]);
+            Line(hdc, &y, sz);
+        }
         wsprintf(sz, L"reads %u, sectors %u, %u ms (longest %u), errors %u, bad %u",
                  g_st.reads, g_st.sectorsRead, g_st.readMs, g_st.maxReadMs, g_st.readErrors, g_st.badRequests);
         Line(hdc, &y, sz);

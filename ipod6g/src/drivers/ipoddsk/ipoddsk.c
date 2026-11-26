@@ -19,6 +19,14 @@
 // sectors that big: then the partition table and the file system agree with
 // the disk they sit on.
 //
+// Volume only. When the FAT32 partition is found, Windows is shown that
+// partition alone: sector 0 of DSK1: is its boot sector, and the disk's
+// partition table (and Apple's firmware partition) stay out of sight. The
+// storage manager then takes the store as a disk without partitions and
+// mounts the FAT32 file system on all of it. Microsoft's partition driver
+// (mspart) did not accept the iPod's own partition table in 4096-byte
+// sectors (store "unformatted", 0 partitions; 2026-11-26).
+//
 #include <windows.h>
 #include <winioctl.h>
 #include <ceddk.h>
@@ -34,6 +42,7 @@ static CRITICAL_SECTION g_cs;           // one command to the disk at a time; al
 static IPODDSK_STATUS   g_ds;
 static DISK_INFO        g_info;
 static DWORD            g_shift;        // log2 of g_ds.factor
+static ULONGLONG        g_base;         // disk block (512 bytes) of Windows' sector 0
 static BYTE             g_bounce[IPODATA_MAX_SECTORS * IPODATA_SECTOR_BYTES];
 
 // a read request as it is used here: copied out of the caller's memory once
@@ -60,11 +69,12 @@ static void Setup(void)
     DSK_MBR mbr;
     DSK_FATBOOT boot;
     DWORD tried, factor = 1, low, high;
-    int pick;
+    int pick, i;
 
     g_ds.ready = 0;
     g_ds.factor = 1;
     g_shift = 0;
+    g_base = 0;
 
     if (IpodAta_Attach() != IPODATA_OK)
     {
@@ -84,6 +94,16 @@ static void Setup(void)
     }
 
     Dsk_ParseMbr(sector, &mbr);
+    RETAILMSG(1, (L"ipoddsk: sector 0: signature %u, FAT boot sector %u\r\n",
+                  mbr.signature, mbr.looksLikeFat));
+    for (i = 0; i < 4; i++)
+    {
+        g_ds.mbrType[i] = mbr.part[i].type;
+        g_ds.mbrStart[i] = mbr.part[i].start;
+        g_ds.mbrSize[i] = mbr.part[i].size;
+        RETAILMSG(1, (L"ipoddsk: partition %d: type %02X, start %u, size %u\r\n",
+                      i, mbr.part[i].type, mbr.part[i].start, mbr.part[i].size));
+    }
     pick = Dsk_PickFat(&mbr);
     if (pick >= 0)
     {
@@ -113,20 +133,36 @@ static void Setup(void)
     if (high)
         low = 0xFFFFFFFF;
 
+    // volume only: the FAT32 partition, cut at the end of the disk
+    if (g_ds.fatFound && g_ds.partStart < low)
+    {
+        if (g_ds.partSize > low - g_ds.partStart)
+            g_ds.partSize = low - g_ds.partStart;
+        g_base = (ULONGLONG)g_ds.partStart << g_shift;
+        low = g_ds.partSize;
+        g_ds.volumeOnly = 1;
+    }
+
     memset(&g_info, 0, sizeof(g_info));
     g_info.di_total_sectors = low;
     g_info.di_bytes_per_sect = IPODATA_SECTOR_BYTES << g_shift;
     g_info.di_heads = 255;
     g_info.di_sectors = 63;
     g_info.di_cylinders = low / (255 * 63);
-    g_info.di_flags = DISK_INFO_FLAG_MBR | DISK_INFO_FLAG_CHS_UNCERTAIN;
+    g_info.di_flags = DISK_INFO_FLAG_CHS_UNCERTAIN;
+    if (!g_ds.volumeOnly)
+        g_info.di_flags |= DISK_INFO_FLAG_MBR;
 
     g_ds.bytesPerSector = g_info.di_bytes_per_sect;
     g_ds.totalSectors = low;
     g_ds.setupStep = IPODDSK_SETUP_OK;
     g_ds.ready = 1;
-    RETAILMSG(1, (L"ipoddsk: %u sectors of %u bytes (the disk's blocks times %u), FAT32 %s\r\n",
-                  low, g_info.di_bytes_per_sect, factor, g_ds.fatFound ? L"found" : L"not found"));
+    RETAILMSG(1, (L"ipoddsk: %u sectors of %u bytes (the disk's blocks times %u), FAT32 %s, %s\r\n",
+                  low, g_info.di_bytes_per_sect, factor, g_ds.fatFound ? L"found" : L"not found",
+                  g_ds.volumeOnly ? L"volume only" : L"whole disk"));
+    if (g_ds.volumeOnly)
+        RETAILMSG(1, (L"ipoddsk: volume at disk block %u (partition %d, start %u x %u)\r\n",
+                      (DWORD)g_base, pick, g_ds.partStart, factor));
 }
 
 //------------------------------------------------------------------------------
@@ -192,6 +228,7 @@ static DWORD DoRead(BYTE *pIn, DWORD lenIn)
     PUCHAR mapped[MAX_SG_BUF];
     DWORD status, i, opened = 0, t0, ms;
     DWORD lbaLow, lbaHigh, left, n, got, sgIndex = 0, sgOff = 0;
+    ULONGLONG lba;
 
     if (!g_ds.ready)
         return ERROR_NOT_READY;
@@ -220,9 +257,10 @@ static DWORD DoRead(BYTE *pIn, DWORD lenIn)
     if (status == ERROR_SUCCESS)
     {
         t0 = GetTickCount();
-        // in the disk's own 512-byte blocks; start times the factor may pass 32 bits
-        lbaLow = req.start << g_shift;
-        lbaHigh = g_shift ? (req.start >> (32 - g_shift)) : 0;
+        // in the disk's own 512-byte blocks, from the volume's start; may pass 32 bits
+        lba = g_base + ((ULONGLONG)req.start << g_shift);
+        lbaLow = (DWORD)lba;
+        lbaHigh = (DWORD)(lba >> 32);
         left = req.count << g_shift;
 
         while (left && status == ERROR_SUCCESS)

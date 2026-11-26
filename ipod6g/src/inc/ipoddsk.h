@@ -12,7 +12,7 @@
 extern "C" {
 #endif
 
-#define IPODDSK_VERSION     1
+#define IPODDSK_VERSION     2
 #define IPODDSK_PROFILE     L"iPodDisk"     // System\StorageManager\Profiles\iPodDisk
 
 // where the look at the disk at start-up stopped (IPODDSK_STATUS.setupStep)
@@ -34,6 +34,10 @@ typedef struct {
     DWORD   totalSectors;   // as shown to Windows
     DWORD   partStart;      // the FAT32 partition, in those sectors
     DWORD   partSize;
+    DWORD   volumeOnly;     // 1: Windows sees only that partition (sector 0 = its boot sector)
+    BYTE    mbrType[4];     // sector 0's partition table as found at start-up
+    DWORD   mbrStart[4];    // (in the table's own units)
+    DWORD   mbrSize[4];
 
     // what Windows asked for
     DWORD   reads;          // read requests carried out

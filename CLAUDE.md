@@ -141,6 +141,11 @@ display, HDD, PMU/backlight, clickwheel, audio.
   See docs/drivers.md "Sound".
 - 2026-11-26: **Windows' volume on the codec verified**: HPACTL/HPBCTL in 1 dB steps below
   -20 dB over `I2C1:` (registry `CodecVolume` 1; 0 = scaled samples). The MDD plan is complete.
+- 2026-11-26: **iPod disk mounts as `\iPod`** (apps launch and files open from it). With the whole
+  disk shown in 4096-byte sectors, mspart rejected the iPod's partition table (store `attr 4` =
+  unformatted, 0 partitions; 80 GB HDD and 128 GB iFlash). ipoddsk now shows Windows only the
+  FAT32 partition (volume only, no MBR), mounted without a partition table. The rejected table
+  entries were not captured (start-up log `ipoddsk: partition N: ...` prints them).
 
 ## Display driver (src/drivers/ipodlcd) - test pattern verified on hardware 2026-11-19
 - `ipodlcd.dll`, GPE flat driver (structure from CEonPi raspiBasic_ddi), loaded by GWES (SHMK).

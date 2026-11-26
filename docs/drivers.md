@@ -69,6 +69,13 @@ the click wheel in particular will need their own set-up there (see each
   FAT32 file system in 4096-byte sectors: at start-up the driver finds the
   FAT32 volume (`dskparse.h`) and shows Windows a disk of the sector size
   the file system uses. Mounted as `\iPod`.
+- **Volume only** (2026-11-26): Windows sees only the FAT32 partition
+  (`DSK1:` sector 0 = its boot sector), so the storage manager mounts it as
+  a disk without partitions. With the whole disk shown, Microsoft's
+  partition driver rejected the iPod's table (store `attr 4` = unformatted,
+  0 partitions) on two iTunes-formatted iPods (80 GB HDD and 128 GB
+  iFlash). The driver logs sector 0's table at start-up
+  (`ipoddsk: partition N: ...`); the panel shows it too.
 - **Expects:** the disk powered and spun up, its pins set up, the controller
   enabled (Rockbox has just read the image from it). PATA only: a CE-ATA
   disk (later models) is refused with its own error code (written from
