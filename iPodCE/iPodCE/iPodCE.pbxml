@@ -14,6 +14,8 @@
     <Feature Name="Item" CatalogItemId="Item:MS:sysgen_audio" />
     <Feature Name="Item" CatalogItemId="Item:MS:sysgen_fatfs" />
     <Feature Name="Item" CatalogItemId="Item:MS:sysgen_battery" />
+    <Feature Name="Item" CatalogItemId="Item:MS:sysgen_qvgap" />
+    <Feature Name="Item" CatalogItemId="Item:MS:sysgen_xpskin" />
   </FeatureCollection>
   <ConfigurationCollection Name="Configurations" EnforceUniqueItems="False">
     <Configuration Name="Item" TargetBinFilename="nk.bin" BuildType="Debug" FriendlyName="ipod6g ARMV5 Debug">
@@ -44,7 +46,10 @@
     <Configuration Name="Item" TargetBinFilename="nk.bin" BuildType="Checked" FriendlyName="ipod6g ARMV5 Checked">
       <FeatureCollection Name="BspFeatures" EnforceUniqueItems="True" />
       <FeatureCollection Name="FeaturesExcludedFromImage" EnforceUniqueItems="True" />
-      <BuildOptionCollection Name="BuildOptions" EnforceUniqueItems="True" />
+      <BuildOptionCollection Name="BuildOptions" EnforceUniqueItems="True">
+        <BuildOption Name="Item" OptionId="BuildOption:MS:IMGNODEBUGGER" OptionValue="1" />
+        <BuildOption Name="Item" OptionId="BuildOption:MS:IMGNOKITL" OptionValue="1" />
+      </BuildOptionCollection>
       <StringDictionary Name="EnvironmentVariables" />
       <LocaleInfo Name="LocaleInformation" />
       <CustomBuildActions Name="CustomBuildActions" />
