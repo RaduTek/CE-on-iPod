@@ -26,6 +26,11 @@
 // driver's thread looks at the DMA position every few milliseconds and
 // refills the page the controller has just left.
 //
+// Being added (docs/audio-mdd-plan.md, step 1): the DMA ring of pcmring.h,
+// on the same channel, with an interrupt per block. For now only its test
+// tone (pcmtone.c, registry TestTone) uses it, once at start-up, before the
+// two-page engine ever runs; step 2 drops the two pages.
+//
 // All functions are called with the driver's lock held, except
 // IpodPcm_Init (start-up) and IpodPcm_StatusIoctl (reads only).
 //
@@ -38,6 +43,7 @@
 
 #include <ipodpcm.h>
 #include <ipodi2c.h>
+#include "pcmring.h"
 
 // physical addresses (Rockbox firmware/export/s5l87xx.h, S5L8702)
 #define PA_CLK              0x3C500000
@@ -68,9 +74,13 @@
 #define I2S_MCLK_HZ         12000000
 #define I2S_DIV             (I2S_MCLK_HZ / IPODPCM_RATE)    // 272
 
+#define DMAC_INTSTATUS      0x00        // per channel: TC or error, after the channel masks
+#define DMAC_INTTCSTATUS    0x04
 #define DMAC_INTTCCLR       0x08
 #define DMAC_INTERRCLR      0x10
+#define DMAC_RAWINTTC       0x14
 #define DMAC_RAWINTERR      0x18
+#define DMAC_ENBLDCHNS      0x1C
 #define DMAC_CONFIG         0x30
 #define DMAC_CH             2           // the channel Rockbox plays through
 #define DMAC_CHBASE         (0x100 + (DMAC_CH << 5))
@@ -80,7 +90,10 @@
 #define CH_CONTROL          (DMAC_CHBASE + 0x0C)
 #define CH_CONFIG           (DMAC_CHBASE + 0x10)
 #define CHCONFIG_E          (1 << 0)
+#define CHCONFIG_IE         (1 << 14)   // error interrupt on (PL080 "mask" bits: 1 = on)
+#define CHCONFIG_ITC        (1 << 15)   // terminal count interrupt on
 #define CHCONFIG_A          (1 << 17)
+#define CH_CONTROL_I        (1u << 31)  // in a list item: terminal count interrupt when it is done
 #define DMAC_PERI_I2S0_TX   0x0A
 
 // one list item: 32-bit words, the source moves, the destination is fixed,
@@ -335,6 +348,11 @@ BOOL IpodPcm_Init(void)
     g_st.ready = 1;
     RETAILMSG(1, (L"ipodwav: ready, I2SCLKDIV %u = %u Hz, pages of %u frames at physical 0x%08x\r\n",
                   div, g_st.rate, g_st.pageFrames, g_bufPhys));
+
+    // docs/audio-mdd-plan.md step 1: the ring and, with TestTone = 1, its
+    // test tone. Neither affects the two-page engine.
+    if (PcmRing_Init())
+        PcmTone_Check(NULL);
     return TRUE;
 }
 
@@ -376,19 +394,10 @@ void IpodPcm_WritePage(DWORD page, const short *pStereo)
         g_st.lateFills++;
 }
 
-BOOL IpodPcm_Start(void)
+// The clocks, the DMA controller and the I2S transmitter, ready for the
+// channel to be started (by the two-page engine or the ring).
+static void PathOn(void)
 {
-    UINT32 *pLli;
-    DWORD words;
-
-    if (!g_st.ready)
-    {
-        g_st.lastStartRc = 1;
-        return FALSE;
-    }
-    if (g_st.running)
-        return TRUE;
-
     // clocks for the DMA controller and the I2S block (0 = running). Written
     // only when a gate is closed: the I2C driver switches another bit of
     // PWRCON1 on and off, and two drivers rewriting one register can undo
@@ -406,6 +415,22 @@ BOOL IpodPcm_Start(void)
     RI2S(I2S_CLKCON) = 1;
     RI2S(I2S_TXCOM) = I2STXCOM_STOP;
     RI2S(I2S_TXCOM) = I2STXCOM_RUN;
+}
+
+BOOL IpodPcm_Start(void)
+{
+    UINT32 *pLli;
+    DWORD words;
+
+    if (!g_st.ready || PcmRing_Running())
+    {
+        g_st.lastStartRc = 1;
+        return FALSE;
+    }
+    if (g_st.running)
+        return TRUE;
+
+    PathOn();
 
     // two list items, one page each, linking to each other
     words = g_st.pageFrames * 2;
@@ -519,4 +544,256 @@ BOOL IpodPcm_StatusIoctl(PBYTE pBufOut, DWORD dwLenOut, PDWORD pdwActualOut)
         rc = FALSE;
     }
     return rc;
+}
+
+// ---------------------------------------------------------------------------
+// The DMA ring (pcmring.h)
+//
+// Memory, not cached: the list items first, the ring after them, block
+// after block, so the ring is contiguous and the channel's source address
+// says where in it the controller reads.
+//
+#define PA_VIC0             0x38E00000  // for PcmRing_Dump only
+#define VIC_IRQSTATUS       0x000
+#define VIC_RAWINTR         0x008
+#define VIC_INTENABLE       0x010
+#define IRQ_DMAC0           16
+
+#define RING_LLI_BYTES      16
+#define RING_OFFSET         512
+#define RING_BLOCK_WORDS    (PCMRING_BLOCK_FRAMES * 2)
+#define RING_BLOCK_BYTES    (RING_BLOCK_WORDS * 4)
+#define RING_BYTES          (PCMRING_BLOCKS * RING_BLOCK_BYTES)
+#define RING_MEM_BYTES      (((RING_OFFSET + RING_BYTES) + 4095) & ~4095)
+
+#if (PCMRING_BLOCKS * RING_LLI_BYTES) > RING_OFFSET
+#error the list items overlap the ring
+#endif
+#if RING_BLOCK_WORDS > 4095
+#error a block is too big for one list item
+#endif
+
+static struct {
+    BYTE   *pMem;
+    ULONG   memPhys;
+    INT32  *pRing;
+    DWORD   ringPhys;
+    DWORD   playing;            // block the controller is playing
+    DWORD   played;             // absolute frame where that block starts
+    BOOL    running;
+    PCMRING_COUNTERS c;
+} g_ring;
+
+static volatile UINT32 *g_pVic0 = NULL;
+
+BOOL PcmRing_Init(void)
+{
+    UINT32 *pLli;
+    DWORD i;
+
+    if (g_ring.pMem != NULL)
+        return TRUE;
+    if (!g_st.ready)
+        return FALSE;
+
+    g_ring.pMem = (BYTE *)AllocPhysMem(RING_MEM_BYTES, PAGE_READWRITE | PAGE_NOCACHE, 0, 0,
+                                       &g_ring.memPhys);
+    if (g_ring.pMem == NULL)
+    {
+        RETAILMSG(1, (L"ipodwav: no memory for the DMA ring (%u bytes)\r\n", RING_MEM_BYTES));
+        return FALSE;
+    }
+    g_ring.pRing = (INT32 *)(g_ring.pMem + RING_OFFSET);
+    g_ring.ringPhys = g_ring.memPhys + RING_OFFSET;
+
+    // list item i plays block i, interrupts when done, links to item i + 1;
+    // the last links back to the first
+    pLli = (UINT32 *)g_ring.pMem;
+    for (i = 0; i < PCMRING_BLOCKS; i++)
+    {
+        pLli[4 * i + 0] = g_ring.ringPhys + i * RING_BLOCK_BYTES;
+        pLli[4 * i + 1] = PA_I2S + I2S_TXDB0;
+        pLli[4 * i + 2] = g_ring.memPhys + ((i + 1) % PCMRING_BLOCKS) * RING_LLI_BYTES;
+        pLli[4 * i + 3] = CH_CONTROL_VALUE(RING_BLOCK_WORDS) | CH_CONTROL_I;
+    }
+    PcmRing_Reset();
+
+    RETAILMSG(1, (L"ipodwav: DMA ring: %u blocks of %u frames at physical 0x%08x, list items at 0x%08x\r\n",
+                  PCMRING_BLOCKS, PCMRING_BLOCK_FRAMES, g_ring.ringPhys, g_ring.memPhys));
+    return TRUE;
+}
+
+void PcmRing_Reset(void)
+{
+    if (g_ring.pMem == NULL || g_ring.running)
+        return;
+    memset(g_ring.pRing, 0, RING_BYTES);
+    g_ring.playing = 0;
+    g_ring.played = 0;
+}
+
+BOOL PcmRing_Start(void)
+{
+    const UINT32 *pLli = (const UINT32 *)g_ring.pMem;
+    UINT32 stale;
+
+    if (g_ring.pMem == NULL || g_st.running)
+        return FALSE;
+    if (g_ring.running)
+        return TRUE;
+
+    PathOn();
+
+    // All 8 channels share one interrupt line. A channel that is switched
+    // off but still has an interrupt pending (left by Rockbox, e.g. its LCD
+    // DMA, after a ROLO start) would hold the line up for good: clear it.
+    // No other driver of this BSP uses DMA controller 0.
+    stale = (RDMA(DMAC_RAWINTTC) | RDMA(DMAC_RAWINTERR)) & ~RDMA(DMAC_ENBLDCHNS) & 0xFF;
+    if (stale != 0)
+    {
+        RDMA(DMAC_INTTCCLR) = stale;
+        RDMA(DMAC_INTERRCLR) = stale;
+        RETAILMSG(1, (L"ipodwav: DMA controller 0: cleared old interrupts of idle channels 0x%02x\r\n",
+                      stale));
+    }
+
+    // block 0, absolute frame 0 (PcmRing_Reset)
+    g_ring.playing = 0;
+    g_ring.played = 0;
+    memset(&g_ring.c, 0, sizeof(g_ring.c));
+
+    // the channel starts with the first list item, its interrupts on
+    RDMA(CH_SRCADDR) = pLli[0];
+    RDMA(CH_DESTADDR) = pLli[1];
+    RDMA(CH_LINK) = pLli[2];
+    RDMA(CH_CONTROL) = pLli[3];
+    RDMA(CH_CONFIG) = CH_CONFIG_VALUE | CHCONFIG_IE | CHCONFIG_ITC;
+    RDMA(CH_CONFIG) = CH_CONFIG_VALUE | CHCONFIG_IE | CHCONFIG_ITC | CHCONFIG_E;
+
+    g_ring.running = TRUE;
+    g_st.starts++;
+    return TRUE;
+}
+
+void PcmRing_Stop(void)
+{
+    if (!g_ring.running)
+        return;
+    g_ring.played = PcmRing_ReadPos();
+    ChannelOff();                       // also clears the channel's interrupts
+    RI2S(I2S_TXCOM) = I2STXCOM_STOP;
+    g_ring.running = FALSE;
+    g_st.stops++;
+}
+
+BOOL PcmRing_Running(void)
+{
+    return g_ring.running;
+}
+
+// The block the controller reads, from its source address. At the very end
+// of the ring (source = ring end) block 0 is next.
+static DWORD RingBlockNow(void)
+{
+    DWORD off = RDMA(CH_SRCADDR) - g_ring.ringPhys;
+
+    if (off > RING_BYTES)
+        return g_ring.playing;          // not in the ring: no news
+    return (off / RING_BLOCK_BYTES) % PCMRING_BLOCKS;
+}
+
+int PcmRing_Ack(void)
+{
+    DWORD cur, done, i;
+
+    if (!g_ring.running)
+        return -1;
+    g_ring.c.interrupts++;
+
+    if (RDMA(DMAC_INTSTATUS) & ~(1u << DMAC_CH))
+        g_ring.c.otherChannels++;
+
+    if (RDMA(DMAC_RAWINTERR) & (1 << DMAC_CH))
+    {
+        g_ring.c.dmaErrors++;
+        g_st.dmaErrors++;
+        RETAILMSG(1, (L"ipodwav: DMA error on the ring, stopped\r\n"));
+        PcmRing_Dump(L"error");
+        PcmRing_Stop();
+        return -1;
+    }
+
+    // clear first, then look: a block that ends after the look raises a
+    // new interrupt
+    RDMA(DMAC_INTTCCLR) = 1 << DMAC_CH;
+
+    // every block from the one last seen playing up to (not including) the
+    // one playing now has been read: silence it
+    cur = RingBlockNow();
+    done = (cur + PCMRING_BLOCKS - g_ring.playing) % PCMRING_BLOCKS;
+    for (i = 0; i < done; i++)
+        memset(g_ring.pRing + ((g_ring.playing + i) % PCMRING_BLOCKS) * RING_BLOCK_WORDS,
+               0, RING_BLOCK_BYTES);
+    g_ring.playing = cur;
+    g_ring.played += done * PCMRING_BLOCK_FRAMES;
+
+    if (done >= 2)
+        g_ring.c.late++;
+    else if (done == 0)
+        g_ring.c.zeroAcks++;
+    return (int)done;
+}
+
+DWORD PcmRing_ReadPos(void)
+{
+    DWORD off, idx;
+
+    if (!g_ring.running)
+        return g_ring.played;
+
+    off = RDMA(CH_SRCADDR) - g_ring.ringPhys;
+    if (off > RING_BYTES)
+        return g_ring.played + PCMRING_BLOCK_FRAMES;   // between list items: assume the block done
+    idx = (off / 8) % PCMRING_FRAMES;
+    return g_ring.played
+         + (idx + PCMRING_FRAMES - g_ring.playing * PCMRING_BLOCK_FRAMES) % PCMRING_FRAMES;
+}
+
+DWORD PcmRing_WindowEnd(void)
+{
+    return g_ring.played + PCMRING_FRAMES;
+}
+
+INT32 *PcmRing_FramePtr(DWORD dwFrame)
+{
+    return g_ring.pRing + 2 * (dwFrame % PCMRING_FRAMES);
+}
+
+DWORD PcmRing_Contiguous(DWORD dwFrame)
+{
+    return PCMRING_FRAMES - (dwFrame % PCMRING_FRAMES);
+}
+
+void PcmRing_Counters(PCMRING_COUNTERS *pc)
+{
+    if (pc != NULL)
+        *pc = g_ring.c;
+}
+
+void PcmRing_Dump(LPCWSTR pszWhen)
+{
+    if (g_pDmac == NULL)
+        return;
+    if (g_pVic0 == NULL)
+        g_pVic0 = (volatile UINT32 *)MapReg(PA_VIC0);
+
+    RETAILMSG(1, (L"ipodwav: [%s] DMAC config 0x%08x int 0x%02x tc 0x%02x rawtc 0x%02x rawerr 0x%02x enabled 0x%02x; ch src 0x%08x link 0x%08x control 0x%08x config 0x%08x\r\n",
+                  pszWhen, RDMA(DMAC_CONFIG), RDMA(DMAC_INTSTATUS), RDMA(DMAC_INTTCSTATUS),
+                  RDMA(DMAC_RAWINTTC), RDMA(DMAC_RAWINTERR), RDMA(DMAC_ENBLDCHNS),
+                  RDMA(CH_SRCADDR), RDMA(CH_LINK), RDMA(CH_CONTROL), RDMA(CH_CONFIG)));
+    if (g_pVic0 != NULL)
+        RETAILMSG(1, (L"ipodwav: [%s] VIC0 raw 0x%08x enabled 0x%08x irq 0x%08x (DMAC0 = bit %u); PWRCON0 0x%08x I2S TXCOM 0x%08x STATUS 0x%08x\r\n",
+                      pszWhen, g_pVic0[VIC_RAWINTR >> 2], g_pVic0[VIC_INTENABLE >> 2],
+                      g_pVic0[VIC_IRQSTATUS >> 2], IRQ_DMAC0, RCLK(CLK_PWRCON0),
+                      RI2S(I2S_TXCOM), RI2S(I2S_STATUS)));
 }

@@ -128,6 +128,11 @@ display, HDD, PMU/backlight, clickwheel, audio.
   Load order I2C1: (0) -> battery (1) -> sound (2) confirmed in the log.
 - **Next (planned 2026-11-26): port the sound driver to Microsoft's wave MDD + our PDD** (CEonPi
   model, drops `getms.ps1`). Full plan: `docs/audio-mdd-plan.md`.
+- 2026-11-26: **DMAC0 interrupt verified** (plan step 1, ROLO): `SYSINTR_AUDIO` (17) <-> IRQ 16,
+  16 x 256-frame DMA ring, test tone 168 interrupts in 1004 ms, 0 timeouts/errors. Rockbox leaves
+  a stale TC bit on DMAC0 channel 4 (its LCD DMA) after ROLO; ring start clears idle channels'
+  status. Synchronous RETAILMSG costs ~3 ms per 40 characters (114 kbaud): keep it out of
+  timing-critical paths.
 
 ## Display driver (src/drivers/ipodlcd) - test pattern verified on hardware 2026-11-19
 - `ipodlcd.dll`, GPE flat driver (structure from CEonPi raspiBasic_ddi), loaded by GWES (SHMK).

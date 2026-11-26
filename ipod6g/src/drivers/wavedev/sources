@@ -22,6 +22,7 @@ SOURCES= \
     dtpnotify.cpp \
     wavertgctrl.cpp \
     ipodpcm.c \
+    pcmtone.c \
 
 TARGETLIBS= \
     $(_COMMONSDKROOT)\lib\$(_CPUDEPPATH)\ceddk.lib \

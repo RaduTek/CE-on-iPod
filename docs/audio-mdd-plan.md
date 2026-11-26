@@ -1,7 +1,22 @@
 # Plan: port the sound driver to Microsoft's wave MDD + our PDD
 
-Status: **planned, not started** (written 2026-11-26). Branch `shared-i2c` has the current
-working driver (commit `3890175`: codec set-up on every start, verified from ROLO and cold start).
+Status: **step 1 verified on hardware from ROLO** (2026-11-26; cold start not yet tried). Log:
+`test tone done: 168 DMA interrupts in 1004 ms (expect ~172 in ~1000 ms), longest gap 36 ms,
+1 late, 0 empty, 0 timeouts, 0 DMA errors, 0 other channels`; tones correct (440 Hz left, 880 Hz
+right), desktop audio still works. The 36 ms gap (and the one late ack, which covered the blocks
+missing from 172) is the `[tone]` register dump: ~400 characters of synchronous RETAILMSG at
+~114 kbaud. Ring start logged `cleared old interrupts of idle channels 0x10` = channel 4,
+Rockbox's LCD DMA (`lcd-s5l8702.c`, `DMAC_CH_PRIO(4)`), so the stale-status clear is needed
+after ROLO. Branch `shared-i2c` has the
+current working driver (commit `3890175`: codec set-up on every start, verified from ROLO and cold
+start).
+
+Step 1 as written: `SYSINTR_AUDIO` (= 17) <-> IRQ 16 in `bsp_cfg.h`/`intr.c`; the ring engine
+(`pcmring.h` interface) lives in `ipodpcm.c` beside the old two-page engine (same channel, never
+both at once); the test tone is `pcmtone.c` (integer sine table, no float per sample), called at
+the end of `IpodPcm_Init` when `TestTone` = 1. Ring start clears stale TC/error status of *idle*
+DMAC0 channels (Rockbox's LCD DMA also uses DMAC0; a leftover bit would hold IRQ 16 high).
+Step 2 moves the `PcmTone_Check` call into `PDD_AudioInitialize` and deletes the page engine.
 
 ## Goal
 
