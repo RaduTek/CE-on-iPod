@@ -136,6 +136,12 @@ the click wheel in particular will need their own set-up there (see each
   Start menu), play/pause, next and previous = the media keys. A program in
   front can ask for the wheel to be the volume keys instead
   (`WM_WHLKEYS_MODE`).
+- Navigation mode (`HKLM\Software\iPod\WheelKeys`, `Navigation` = 1, the
+  image's default; read when `whlkeys.exe` starts): next/previous = Tab /
+  Shift+Tab, play switches the wheel between Down/Up and Right/Left
+  (clockwise = Right), play held 0.6 s = `WM_CLOSE` to the window in front
+  (not the desktop or taskbar; CE 7 ignores Alt+F4, tried). `Navigation` 0
+  = the media keys above.
 - `IOCTL_IPODWHL_GET_STATUS` gives the counters plus the finger's position
   (0 to 95) and whether the wheel is touched, without taking events.
 - **Expects:** the wheel controller running as Rockbox left it.

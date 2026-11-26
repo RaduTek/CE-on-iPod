@@ -156,3 +156,9 @@ ENDIF BSP_NODISPLAY !
 [HKEY_LOCAL_MACHINE\init]
     "Launch86"="whlkeys.exe"
     "Depend86"=hex:14,00,1e,00
+; whlkeys.exe: "Navigation" 1 = next/previous are Tab/Shift+Tab, play
+; switches the wheel between Down/Up and Right/Left, play held 0.6 s closes
+; the window in front (WM_CLOSE); 0 = next/previous/play are the media keys.
+; Read when it starts.
+[HKEY_LOCAL_MACHINE\Software\iPod\WheelKeys]
+    "Navigation"=dword:1
