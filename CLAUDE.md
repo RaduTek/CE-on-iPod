@@ -91,7 +91,8 @@ display, HDD, PMU/backlight, clickwheel, audio.
   wince.img3 or commit the blobs. OAL touch probe off by default (BSP_NOTOUCHPROBE=1).
 - 2026-11-28 touch frames verified (step 4a): every frame read arrives one byte late and is
   completed (z2.c TakeLateByte); frames at registry FrameHz (500 kHz default); orientation
-  needs no swap/flip. Step 4b written: ipttouch.dll = PDD of Microsoft's tchstreammdd
+  needs no swap/flip. **Step 4b verified 2026-11-28: touch works in Windows, taps land
+  correctly.** ipttouch.dll = PDD of Microsoft's tchstreammdd
   (TCH1:, Drivers\BuiltIn\Touch, tchproxy finds it by IClass), samples flagged CALIBRATED in
   quarter pixels. Needs SYSGEN_TOUCH; BSP_NOTOUCH no longer set in ipodtouch2g.bat.
 - `startup.s` is position independent until it has copied the image to its link address, prints

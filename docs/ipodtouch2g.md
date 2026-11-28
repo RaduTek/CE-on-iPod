@@ -1,7 +1,12 @@
 # iPod touch 2G bring-up (ipodtouch2g BSP, iPodtouchCE OS design)
 
-Status (2026-11-28): **boots to the Standard Shell desktop on the LCD** (Checked, packed 12.3 MB
-image). No input yet. BSP for CE 7 on the iPod touch 2nd generation (MC model, iOS 3.1.3).
+Status (2026-11-28): **boots to the Standard Shell desktop on the LCD with working touch input**
+(Checked, packed 12.4 MB image; taps land where the finger is). BSP for CE 7 on the iPod touch
+2nd generation (MC model, iOS 3.1.3).
+
+If an image that built fine does not start at all (no blue screen, no `CE>`, reset into iOS),
+check the start-up chain first: on 2026-11-28 a good image failed several times in a row and
+then booted again unchanged (state of the device or of loadibec, not the image).
 
 ## Third boot (2026-11-28, verified): packed image, display, desktop
 - Packed image unpacked and started: `image len 0x015eacb8`, `packed len 0x00bbb959`.
@@ -174,7 +179,9 @@ Steps, each testable on its own:
    clockwise from top left and the middle: screen 34,14 / 303,26 / 306,467 / 15,473 /
    157,258: x to the right, y downwards, no swap or flip; the dimensions-report surface
    (4602 x 7306) maps the corners to within ~15 px of the edges.
-4b. Touches as input: **written 2026-11-28, not yet run.** ipttouch.dll is now the PDD of
+4b. Touches as input: **verified 2026-11-28: touch works in Windows, taps land correctly**
+   (the quarter-pixel, CALIBRATED reporting and the identity CalibrationData are right; no
+   calibration screen). ipttouch.dll is now the PDD of
    Microsoft's CE 7 touch stream driver (`tchstreammdd.lib`, exports `tchstream.def`,
    `TchPdd_Init` + deinit/ioctl/powerdown/powerup, as SMDK6410): device manager loads it as
    `TCH1:` from `Drivers\BuiltIn\Touch` (Flags 8, IClass touch driver class + power-manageable
@@ -297,7 +304,8 @@ serial cables also put a resistor on pin 21).
 - `IOCTL_HAL_REBOOT` resets through the watchdog; the iPod then boots iOS.
 
 ## Next
-1. Test the display driver and the desktop.
-2. Checked with serial KITL to Platform Builder.
-3. Touch: identify the hardware (see "Touch"), then a probe driver.
-4. Buttons (GPIO), NAND (Apple FTL).
+1. Checked with serial KITL to Platform Builder.
+2. Touch: data-ready by GPIO interrupt instead of the 2 ms poll; power down with the screen;
+   maybe multi-touch (the controller reports up to 10 fingers).
+3. Buttons (GPIO: home, power, volume), backlight and battery through the D1759.
+4. NAND (Apple FTL), suspend through LLB (PA 0x08000000-0x08000FFF must then stay free).

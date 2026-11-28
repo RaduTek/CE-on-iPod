@@ -14,6 +14,8 @@ A Board Support Package (BSP) for running Windows Embedded Compact 7 (CE 7) on t
 - `iPodCE/`: sample OS design (headless).
 - `docs/bringup.md`: boot chain, serial wiring, how to build and test.
 
+Also a 2nd BSP for the iPod touch 2nd gen (`ipodtouch2g` and `iPodtouchCE` sample project). ([Demo Video](https://youtu.be/vVjWy2HCVt4))
+
 ## Requirements
 
 - Windows Embedded Compact 7 Platform Builder with **ARMv5** support installed.
@@ -65,6 +67,10 @@ Building an image with the entire CE shell is quite wasteful in terms of memory,
 Without the shell, the image is ~8 MB with everything required to run graphical apps (GWES). With the shell, the image grows to ~23 MB and takes much longer to boot, especially when connected to a debugger via KITL.
 
 Currently, the sample VS project [iPodCE](iPodCE) has the shell catalog items selected, but I will remove them later for a lighter image.
+
+### CE on the iPod touch 2nd gen
+
+Make image process generates a compressed `wince.img3` image that can be loaded on an iPod in DFU mode using `loadibec`. The image had to be compressed to fit in under 16 MB, which is the max USB buffer size. Larger images just crash the iPod and reset back into iOS without ever booting into custom code.
 
 ## Credits
 
