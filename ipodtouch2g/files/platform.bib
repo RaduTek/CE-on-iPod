@@ -1,0 +1,35 @@
+;
+; platform.bib - BSP modules for the ipodtouch2g BSP
+;
+; The OAL (nk.exe) and kitl.dll are added to the image by the common
+; build files. Drivers are added here as they are written.
+;
+
+MODULES
+; Name             Path                                            Memory Type
+; --------------   ---------------------------------------------   ------ ----
+
+; @CESYSGEN IF CE_MODULES_DISPLAY
+IF BSP_NODISPLAY
+    ddi_nop.dll        $(_FLATRELEASEDIR)\ddi_nop.dll                  NK     SHMK
+ELSE
+    ; iPod touch 2G LCD on iBoot's framebuffer (src\drivers\iptlcd),
+    ; loaded by GWES in kernel mode
+    iptlcd.dll         $(_FLATRELEASEDIR)\iptlcd.dll                   NK     SHMK
+ENDIF BSP_NODISPLAY
+; @CESYSGEN ENDIF CE_MODULES_DISPLAY
+
+IF BSP_NOIPTTOUCH !
+    ; Zephyr2 touch controller (src\drivers\ipttouch), device manager, kernel mode
+    ipttouch.dll       $(_FLATRELEASEDIR)\ipttouch.dll                 NK     SHK
+ENDIF BSP_NOIPTTOUCH !
+
+FILES
+;   Name        Path                                            Memory Flags
+;   ----------  ---------------------------------------------   -----------
+IF BSP_NOIPTTOUCH !
+; Apple's touch controller firmware and calibration, copied into the release
+; directory by PreFmergeBib.bat from ipodtouch2g\files\z2\ (gitignored)
+    z2fw.bin       $(_FLATRELEASEDIR)\z2fw.bin                         NK     SH
+    z2cal.bin      $(_FLATRELEASEDIR)\z2cal.bin                        NK     SH
+ENDIF BSP_NOIPTTOUCH !

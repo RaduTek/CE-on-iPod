@@ -1,0 +1,7 @@
+!if 0
+ipodtouch2g BSP sources
+!endif
+DIRS=\
+    oal \
+    kitl \
+    drivers \

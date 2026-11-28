@@ -1,0 +1,5 @@
+!if 0
+ipodtouch2g BSP root
+!endif
+DIRS=\
+    src \

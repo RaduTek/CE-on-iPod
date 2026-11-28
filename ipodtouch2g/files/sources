@@ -1,0 +1,8 @@
+!if 0
+This directory contains no source code. This file only exposes the
+files in this directory to the IDE.
+!endif
+SKIPBUILD=1
+TARGETNAME=
+TARGETTYPE=
+SOURCES=

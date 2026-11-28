@@ -1,0 +1,6 @@
+!if 0
+ipodtouch2g OAL: oal.lib, then oal.exe (becomes nk.exe in the image)
+!endif
+DIRS=\
+    oallib \
+    oalexe \

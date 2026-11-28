@@ -1,0 +1,67 @@
+!if 0
+ipodtouch2g OAL library (oal.lib)
+!endif
+
+TARGETNAME=oal
+TARGETTYPE=LIBRARY
+
+#
+# KITL shares UART0 with the debug serial port. In KITL builds the OAL
+# does not write raw debug text to the UART (debug.c).
+#
+!IF "$(IMGNOKITL)" == ""
+CDEFINES=$(CDEFINES) -DSERIAL_KITL=1
+!ENDIF
+
+#
+# startup.s prints the hand-over probe on UART0 before KernelStart when
+# EARLY_UART is TRUE: always in IMGNOKITL=1 builds, or on request with
+# BSP_EARLYUART=1.
+#
+BSP_EARLY_UART_ASM=FALSE
+!IF "$(IMGNOKITL)" == "1"
+BSP_EARLY_UART_ASM=TRUE
+!ENDIF
+!IF "$(BSP_EARLYUART)" == "1"
+BSP_EARLY_UART_ASM=TRUE
+!ENDIF
+
+#
+# Boot stage colours on the screen (startup.s and init.c), unless
+# BSP_NOSCREENMARKS=1.
+#
+BSP_SCREEN_MARKS_ASM=TRUE
+!IF "$(BSP_NOSCREENMARKS)" == "1"
+BSP_SCREEN_MARKS_ASM=FALSE
+!ELSE
+CDEFINES=$(CDEFINES) -DBSP_SCREEN_MARKS=1
+!ENDIF
+
+#
+# Touch bring-up probe at the end of OEMInit (touchprobe.c), unless
+# BSP_NOTOUCHPROBE=1. Read only; prints in builds without KITL.
+#
+!IF "$(BSP_NOTOUCHPROBE)" != "1"
+CDEFINES=$(CDEFINES) -DBSP_TOUCHPROBE=1
+!ENDIF
+
+ADEFINES=-pd "EARLY_UART SETL {$(BSP_EARLY_UART_ASM)}" -pd "SCREEN_MARKS SETL {$(BSP_SCREEN_MARKS_ASM)}" $(ADEFINES)
+
+# VFP support (vfpsupport.h, oal_vfp_arm.lib)
+INCLUDES=$(INCLUDES);$(_PLATFORMROOT)\common\src\arm\common\vfp
+
+SOURCES= \
+    debug.c \
+    init.c \
+    intr.c \
+    ioctl.c \
+    memory.c \
+    power.c \
+    rtc.c \
+    timer.c \
+    touchprobe.c \
+    vector.c \
+
+ARM_SOURCES= \
+    startup.s \
+

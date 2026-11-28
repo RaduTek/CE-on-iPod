@@ -1,0 +1,8 @@
+;
+; iptlcd.def - exports of the iPod touch 2G display driver
+;
+LIBRARY IPTLCD
+
+EXPORTS
+    DisplayInit
+    DrvEnableDriver

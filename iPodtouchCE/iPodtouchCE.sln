@@ -1,0 +1,23 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 10.00
+# Visual Studio 2008
+Project("{901F95BB-0EF7-4A93-94B5-A8655FA8CA96}") = "iPodtouchCE", "iPodtouchCE\iPodtouchCE.pbxml", "{C0A86F77-3C73-4656-8587-69E5F668761C}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		ipodtouch2g ARMV6 Checked|Platform Builder (_TGTCPU) = ipodtouch2g ARMV6 Checked|Platform Builder (_TGTCPU)
+		ipodtouch2g ARMV6 Debug|Platform Builder (_TGTCPU) = ipodtouch2g ARMV6 Debug|Platform Builder (_TGTCPU)
+		ipodtouch2g ARMV6 Release|Platform Builder (_TGTCPU) = ipodtouch2g ARMV6 Release|Platform Builder (_TGTCPU)
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{C0A86F77-3C73-4656-8587-69E5F668761C}.ipodtouch2g ARMV6 Checked|Platform Builder (_TGTCPU).ActiveCfg = ipodtouch2g ARMV6 Checked|Platform Builder (_TGTCPU)
+		{C0A86F77-3C73-4656-8587-69E5F668761C}.ipodtouch2g ARMV6 Checked|Platform Builder (_TGTCPU).Build.0 = ipodtouch2g ARMV6 Checked|Platform Builder (_TGTCPU)
+		{C0A86F77-3C73-4656-8587-69E5F668761C}.ipodtouch2g ARMV6 Debug|Platform Builder (_TGTCPU).ActiveCfg = ipodtouch2g ARMV6 Debug|Platform Builder (_TGTCPU)
+		{C0A86F77-3C73-4656-8587-69E5F668761C}.ipodtouch2g ARMV6 Debug|Platform Builder (_TGTCPU).Build.0 = ipodtouch2g ARMV6 Debug|Platform Builder (_TGTCPU)
+		{C0A86F77-3C73-4656-8587-69E5F668761C}.ipodtouch2g ARMV6 Release|Platform Builder (_TGTCPU).ActiveCfg = ipodtouch2g ARMV6 Release|Platform Builder (_TGTCPU)
+		{C0A86F77-3C73-4656-8587-69E5F668761C}.ipodtouch2g ARMV6 Release|Platform Builder (_TGTCPU).Build.0 = ipodtouch2g ARMV6 Release|Platform Builder (_TGTCPU)
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal

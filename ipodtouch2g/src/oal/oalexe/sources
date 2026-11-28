@@ -1,0 +1,42 @@
+!if 0
+ipodtouch2g OAL executable (oal.exe, becomes nk.exe in the image)
+!endif
+
+TARGETNAME=oal
+TARGETTYPE=PROGRAM
+
+# oal.exe must not have a fixed base; the linker generates oal.rel
+LDEFINES=/FIXED:NO
+
+# Finish all previous directories before building this one
+SYNCHRONIZE_DRAIN=1
+
+# Entry point: startup.s
+EXEENTRY=StartUp
+
+SOURCES=
+
+#
+# oemmain  : OEMInitGlobals (OAL <-> kernel function table exchange)
+# nkldr    : CPU-specific kernel startup (KernelStart), ARMV6
+# nkstub   : kernel function translation stubs
+# oal_cache_arm1136 : ARMv6 (ARM1136/ARM1176) cache/TLB routines
+#            (platform\common\src\ARM\ARM1136). CEonPi uses a copy of the
+#            Samsung S3C6410 library instead; that is the fallback if this
+#            one misbehaves on the ARM1176.
+# oal_vfp_arm      : VFP support (VfpOemInit)
+# oal_memory_arm   : OALPAtoVA/OALVAtoPA
+# oal_log  : OALMSG/OALLog
+# oal      : this BSP's OAL (..\oallib)
+#
+TARGETLIBS= \
+    $(_COMMONOAKROOT)\lib\$(_CPUDEPPATH)\oemmain.lib \
+    $(_COMMONOAKROOT)\lib\$(_CPUDEPPATH)\nkldr.lib \
+    $(_COMMONOAKROOT)\lib\$(_CPUDEPPATH)\nkstub.lib \
+    $(_COMMONOAKROOT)\lib\$(_CPUINDPATH)\fulllibc.lib \
+    $(_PLATCOMMONLIB)\$(_CPUINDPATH)\oal_log.lib \
+    $(_PLATCOMMONLIB)\$(_CPUDEPPATH)\oal_cache_arm1136.lib \
+    $(_PLATCOMMONLIB)\$(_CPUINDPATH)\oal_vfp_arm.lib \
+    $(_PLATCOMMONLIB)\$(_CPUINDPATH)\oal_memory_arm.lib \
+    $(_PLATLIB)\$(_CPUDEPPATH)\oal.lib \
+

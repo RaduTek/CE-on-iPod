@@ -1,0 +1,30 @@
+!if 0
+ipttouch.dll - iPod touch 2G touch driver: PDD (ipttouch.c, z2.c, z2hw.c)
+linked with Microsoft's touch stream MDD (tchstreammdd.lib), stream driver
+"TCH1:" with the MDD's exports (tchstream.def), as the SMDK6410 BSP does.
+Needs the Touch Screen (Stylus) catalog item (SYSGEN_TOUCH).
+!endif
+
+# BSP_NOIPTTOUCH=1: no touch driver (and no SYSGEN_TOUCH needed)
+!IF "$(BSP_NOIPTTOUCH)" == "1"
+SKIPBUILD=1
+!ENDIF
+
+TARGETNAME=ipttouch
+TARGETTYPE=DYNLINK
+DLLENTRY=_DllMainCRTStartup
+PREPROCESSDEFFILE=1
+DEFFILE=$(_COMMONOAKROOT)\inc\tchstream.def
+
+SOURCES= \
+    ipttouch.c \
+    z2.c \
+    z2hw.c \
+
+TARGETLIBS= \
+    $(_COMMONSDKROOT)\lib\$(_CPUDEPPATH)\ceddk.lib \
+    $(_COMMONSDKROOT)\lib\$(_CPUDEPPATH)\coredll.lib \
+
+SOURCELIBS= \
+    $(_COMMONOAKROOT)\lib\$(_CPUINDPATH)\tchstreammdd.lib \
+

@@ -23,3 +23,10 @@ nk.bin
 # Logs dropped in the repo root for review
 /bootlog.txt
 /buildlog.txt
+
+# iPod touch 2G images and the openiBoot IMG3 template (copied locally, not in git)
+*.img3
+wince.bin
+
+# Apple touch firmware/calibration and the ioreg dump they come from (local only, not ours to publish)
+ipodtouch2g/files/z2/

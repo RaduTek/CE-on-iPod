@@ -1,0 +1,69 @@
+;
+; platform.reg - BSP registry settings for the ipodtouch2g BSP
+;
+; Note: makeimg reads the copy of this file in the flat release directory.
+; After editing it, run "Copy Files to Release Directory" before makeimg.
+;
+
+; No suspend: there is no wake-up source yet
+[HKEY_LOCAL_MACHINE\Explorer]
+    "Suspend"=dword:0
+
+; @CESYSGEN IF CE_MODULES_DISPLAY
+IF BSP_NODISPLAY !
+; iPod touch 2G LCD: the mode iBoot set up, 320x480 RGB888 (src\drivers\iptlcd)
+[HKEY_LOCAL_MACHINE\Drivers\Display\iptlcd\Config]
+    "DisplayDll"="iptlcd.dll"
+
+[HKEY_LOCAL_MACHINE\System\GDI\Drivers]
+    "Display"="iptlcd.dll"
+
+[HKEY_LOCAL_MACHINE\System\GDI\DisplayCandidates]
+    "Candidate10"="Drivers\\Display\\iptlcd\\Config"
+
+[HKEY_LOCAL_MACHINE\System\GDI\Rotation]
+    "Angle"=dword:0
+
+; No window animation: every frame is drawn by the CPU
+[HKEY_LOCAL_MACHINE\SYSTEM\GWE]
+    "Animate"=dword:0
+ENDIF BSP_NODISPLAY !
+; @CESYSGEN ENDIF CE_MODULES_DISPLAY
+
+; @CESYSGEN IF CE_MODULES_TOUCH
+IF BSP_NOIPTTOUCH !
+; Touch driver (src\drivers\ipttouch): Microsoft's touch stream MDD with our
+; Zephyr2 PDD, "TCH1:". Flags 8 = DEVFLAGS_NAKEDENTRIES (the MDD exports
+; Init, Open, ... without a prefix). IClass: touch driver class (tchproxy
+; finds the driver by it) and power-manageable touch device (common.reg).
+; Layout as Microsoft's SMDK6410 BSP.
+[HKEY_LOCAL_MACHINE\Drivers\BuiltIn\Touch]
+    "Dll"="ipttouch.dll"
+    "Prefix"="TCH"
+    "Flags"=dword:8
+    "Index"=dword:1
+    "Order"=dword:40
+    "IClass"=multi_sz:"{25121442-08CA-48dd-91CC-BFC9F790027C}",
+                      "{7119776D-9F23-4e4e-9D9B-9AE962733770}"
+    ; frame read speed in Hz (hex): 7A120 = 500 kHz (default), 1E8480 = 2 MHz
+    ; (Linux), 14438 = 83 kHz (start-up speed)
+    "FrameHz"=dword:7A120
+
+; The driver reports screen positions already (quarter pixels, flagged
+; calibrated), so tchproxy does not calibrate them. This calibration is the
+; identity for tchproxy's default points on 320 x 480 (centre, then
+; (64,96) (64,384) (256,384) (256,96)), so nothing asks for a calibration.
+[HKEY_LOCAL_MACHINE\HARDWARE\DEVICEMAP\TOUCH]
+    "CalibrationData"="640,960 256,384 256,1536 1024,1536 1024,384"
+    "MaxCalError"=dword:7
+
+; Double tap like the SMDK6410 BSP (pixels, ms)
+[HKEY_CURRENT_USER\ControlPanel\Pen]
+    "DblTapDist"=dword:18
+    "DblTapTime"=dword:637
+
+; touch screen only (no keyboard)
+[HKEY_LOCAL_MACHINE\ControlPanel]
+    "InputConfig"=dword:2
+ENDIF BSP_NOIPTTOUCH !
+; @CESYSGEN ENDIF CE_MODULES_TOUCH

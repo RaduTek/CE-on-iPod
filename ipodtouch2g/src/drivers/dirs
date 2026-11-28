@@ -1,0 +1,8 @@
+!if 0
+ipodtouch2g drivers. ipttouch needs SYSGEN_TOUCH (its MDD library comes
+from the Touch Screen (Stylus) catalog item); BSP_NOIPTTOUCH=1 makes its
+sources file skip the build.
+!endif
+DIRS=\
+    iptlcd \
+    ipttouch \

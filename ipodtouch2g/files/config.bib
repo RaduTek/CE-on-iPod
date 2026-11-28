@@ -1,0 +1,68 @@
+;
+; config.bib - memory map for the ipodtouch2g BSP (iPod touch 2G, S5L8720)
+;
+; Physical memory: 128 MB DRAM at PA 0x08000000-0x0FFFFFFF (openiBoot maps
+; this range; not yet verified on the device). OEMAddressTable
+; (src\inc\OEMAddrTable.inc) maps it at VA 0x80000000.
+;
+; Boot: loadibec sends wince.img3 to the patched iBoot, which starts the
+; payload (nk.nb0, trimmed) at its first byte. The load address is not known
+; yet; startup.s copies the image to PA 0x08000000 = NK start if it runs
+; anywhere else, so the image is always linked at 0x80000000.
+;
+; Top 4 MB (PA 0x0FC00000-0x0FFFFFFF) are left out of CE's RAM: openiBoot
+; puts the framebuffer at 0x0FC00000 and iBoot probably lives near the top
+; of DRAM too. startup.s uses PA 0x0FBE0000-0x0FBF0FFF (stack, relocation
+; stub) before the kernel starts; that memory becomes normal RAM afterwards.
+;
+; Keep in sync with OEMAddrTable.inc, image_cfg.h and s5l8720.inc.
+;
+
+MEMORY
+
+;   NK is at most 32 MB. If romimage overflows it, it writes nk.nb1 and
+;   PostMakeimg.bat fails the build. AUTOSIZE moves the NK/RAM boundary to the
+;   actual image end, so a large NK costs no RAM.
+#define     NKSTART      80000000
+#define     NKLEN        02000000
+#define     RAMSTART     82000000
+;   RAM ends at VA 0x87C00000 = PA 0x0FC00000 (the reserved top 4 MB start)
+#define     RAMLEN       05C00000
+
+;-----------------------------------------------------
+;   NAME        ADDRESS     SIZE            TYPE
+;-----------------------------------------------------
+    NK         $(NKSTART)  $(NKLEN)        RAMIMAGE
+    RAM        $(RAMSTART) $(RAMLEN)       RAM
+
+; Fixup vars
+;   kernel.dll:initialKernelLogZones 00000000 0000ffff      FIXUPVAR
+   kernel.dll:initialKernelLogZones 00000000 00000010      FIXUPVAR
+
+CONFIG
+
+; Compress writable sections of modules
+COMPRESSION=ON
+
+IF IMGPROFILER
+    PROFILE=ON
+ELSE
+    PROFILE=OFF
+ENDIF
+
+; Writable kernel sections are relocated to the start of RAM; required
+; because the kernel starts executing with the MMU off.
+KERNELFIXUPS=ON
+
+; Let romimage move the NK/RAM boundary to the actual image size.
+AUTOSIZE=ON
+
+; Flat binary image (nk.nb0) starting at the NK region.
+IF IMGFLASH
+    ROMSTART = 80000000
+    ROMSIZE = $(NKLEN)
+    ROMWIDTH = 32
+ENDIF
+
+; Object store / program memory split
+FSRAMPERCENT=0x20202020

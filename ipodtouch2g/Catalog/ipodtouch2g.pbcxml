@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CatalogFile xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" RequiredVersion="7.00" xmlns="urn:Microsoft.PlatformBuilder/Catalog">
+  <FileInformation Id="FileInformation:CE-on-iPod:ipodtouch2g">
+    <Title>ipodtouch2g</Title>
+    <Description>ipodtouch2g BSP Catalog Items</Description>
+    <Vendor>CE-on-iPod</Vendor>
+    <OSVersion>7.00</OSVersion>
+    <FileVersion>0.1</FileVersion>
+  </FileInformation>
+  <Bsp Id="Bsp:CE-on-iPod:ipodtouch2g:ARMV6">
+    <Title>ipodtouch2g: ARMV6</Title>
+    <Description>Apple iPod touch 2nd generation (Samsung S5L8720, ARM1176JZF-S), started by a patched iBoot through loadibec</Description>
+    <PlatformDirectory>ipodtouch2g</PlatformDirectory>
+    <CpuId>Cpu:ARMV6</CpuId>
+    <BspItemId>Item:CE-on-iPod:ipodtouch2g:OAL</BspItemId>
+    <BspItemId>Item:CE-on-iPod:ipodtouch2g:KITL</BspItemId>
+  </Bsp>
+  <Item Id="Item:CE-on-iPod:ipodtouch2g:OAL">
+    <Title>ipodtouch2g OAL</Title>
+    <Description>OEM adaptation layer for the S5L8720</Description>
+    <Type>BspSpecific</Type>
+    <Location />
+    <SourceCode>
+      <Title>OAL SOURCE CODE</Title>
+      <Path>$(_WINCEROOT)\PLATFORM\IPODTOUCH2G\SRC\OAL</Path>
+    </SourceCode>
+  </Item>
+  <Item Id="Item:CE-on-iPod:ipodtouch2g:KITL">
+    <Title>ipodtouch2g serial KITL</Title>
+    <Description>KITL over the dock connector UART (UART0, at the speed iBoot set up)</Description>
+    <Type>BspSpecific</Type>
+    <Location />
+    <SourceCode>
+      <Title>KITL SOURCE CODE</Title>
+      <Path>$(_WINCEROOT)\PLATFORM\IPODTOUCH2G\SRC\KITL</Path>
+    </SourceCode>
+  </Item>
+</CatalogFile>

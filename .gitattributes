@@ -28,4 +28,6 @@ OSDesign.db  text eol=crlf
 *.suo        binary
 *.ipod       binary
 *.nb0        binary
+*.img3       binary
+*.bin        binary
 Thumbs.db    binary

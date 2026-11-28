@@ -56,6 +56,49 @@ display, HDD, PMU/backlight, clickwheel, audio.
 - `docs/bringup.md`: boot chain, wiring, build and test steps. `docs/bootloader.md`: Rockbox
   bootloader build (32 MiB, PLAY -> /wince.ipod); the patch is `rockbox/0001-*.patch` (`git am`).
 
+## Second BSP: iPod touch 2G (`ipodtouch2g/`, OS design `iPodtouchCE/`) - started 2026-11-28
+- S5L8720, ARM1176JZF-S (**ARMV6**), 128 MB DRAM at PA 0x08000000. User's device: MC model
+  (new bootrom), iOS 3.1.3: tethered every cold boot, images go over USB with `loadibec`
+  (IMG3 type iBEC, `files/mkimg3.ps1`; openiBoot's `template-ipt2g.img3` copied into `files/`,
+  gitignored). Must appear in the VM as `C:\WINCE700\platform\ipodtouch2g`.
+- Hardware reference: `C:\Dev\openiBoot` (`plat-s5l8720/`, GPL: documentation only, incomplete
+  port). CE ARMv6 reference: CEonPi (same core). Status, probe and open questions:
+  `docs/ipodtouch2g.md`.
+- 2026-11-28 first boot (Checked): probe, relocation (iBoot runs the payload at 0x09000040),
+  KernelStart, OEMInit, VFP, 12 MHz tick counter, timer 4 tick, framebuffer 0x0FC00000 RGB888
+  320x480 all verified; loadibec needs the iTunes USB driver. UART garbled after OEMInit (Tx-empty
+  status lags the write once caches are on); fix in `s5l8720_uart.h`, verified on the second
+  boot. config.bib RAM end corrected to VA 0x87C00000 (was 0x8FC00000, past the 128 MB).
+- iBSS upload buffer is 16 MiB (12 MiB payload boots, 16 MiB resets): images are LZ4-packed by
+  `mkimg3.ps1 -Compress` (first 64 KB unpacked, header 'LZCE' at jump page 0x20) and unpacked by
+  startup.s. Verified 2026-11-28 (23 MB Checked image, packed 12.3 MB).
+- Display driver `iptlcd.dll` (src/drivers/iptlcd): GPE on iBoot's framebuffer, cached view +
+  CacheRangeFlush after each blit/line; OS design has GWES + Standard Shell. **Verified
+  2026-11-28: boots to the desktop.** The hand-over state varies between boots (MMU on or off,
+  tick counter running or stopped): startup.s/OALTimerInit must handle both.
+  Touch: Zephyr2 on SPI4 (0x3E100000), reset GPIO 0x0a06, CS 0x0a07, ATN GPIO int 0x6D, power
+  LDO 3 of the D1759 power chip (i2c0, 0x73), from an iOS ioreg dump; firmware/calibration in
+  `ipodtouch2g/files/z2/` (Apple's, gitignored, never commit). Table and steps: docs/ipodtouch2g.md.
+- Reference: **n72-linux** (github.com/n72-linux/linux, branch n72: zephyr2.c,
+  apple-n72-pmu-regulator.c, s5l8720-n72.dts) runs Linux with working touch on the N72. GPL:
+  documentation only. D1759 LDO map from it: voltage 0x19+n, enable 0x10 bit n+2; LDO 3 (touch)
+  was on. Touch reset 0x0a06 is active-HIGH, data ready = pin 0x0a05 (GPIO int = pin + 24), low.
+- 2026-11-28 touch SPI link verified (touchprobe.c step 3): SPI4 SETUP 0x401e, PIN 2, CLKDIV 290,
+  polled FIFOs, CS GPIO; after reset the bootloader sends the banner `1f 01` and releases data
+  ready; idle acks read 0x4879. Next: touch driver with firmware upload (expect ack 0x4bc1).
+- Touch driver step 4a written (`src/drivers/ipttouch`, `ZTP1:`): boots the Zephyr2 and logs
+  touches. The image now carries Apple's z2 firmware (from gitignored files/z2): never publish
+  wince.img3 or commit the blobs. OAL touch probe off by default (BSP_NOTOUCHPROBE=1).
+- 2026-11-28 touch frames verified (step 4a): every frame read arrives one byte late and is
+  completed (z2.c TakeLateByte); frames at registry FrameHz (500 kHz default); orientation
+  needs no swap/flip. Step 4b written: ipttouch.dll = PDD of Microsoft's tchstreammdd
+  (TCH1:, Drivers\BuiltIn\Touch, tchproxy finds it by IClass), samples flagged CALIBRATED in
+  quarter pixels. Needs SYSGEN_TOUCH; BSP_NOTOUCH no longer set in ipodtouch2g.bat.
+- `startup.s` is position independent until it has copied the image to its link address, prints
+  a hand-over probe (IMGNOKITL=1 or BSP_EARLYUART=1) and paints the screen per boot stage.
+- Same file rules as ipod6g. Do not change its memory map (`config.bib`, `OEMAddrTable.inc`,
+  `image_cfg.h`, `s5l8720.inc`) without asking.
+
 ## Reference trees (read-only)
 - `../rockbox/`: hardware facts for everything (S5L8702 registers, LCD, ATA, PMU, codec).
   Key files: `firmware/export/s5l87xx.h`, `firmware/export/uc87xx.h`,
